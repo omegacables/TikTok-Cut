@@ -213,7 +213,7 @@ def _timing_donor_words(video_path, language, device, compute_type, progress=Non
         model = _get_model(device, compute_type, donor_name)
         seg_iter, info = model.transcribe(
             str(video_path), language=language, word_timestamps=True,
-            vad_filter=True, beam_size=1, condition_on_previous_text=False,
+            vad_filter=True, beam_size=3, condition_on_previous_text=False,
             no_speech_threshold=0.6, compression_ratio_threshold=2.4,
             log_prob_threshold=-1.0, temperature=[0.0, 0.2, 0.4],
             hallucination_silence_threshold=2.0,

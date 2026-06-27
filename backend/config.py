@@ -302,8 +302,8 @@ class Settings:
 
     # kotoba 等（単語時刻を出さない蒸留モデル）に実単語タイムスタンプを与える「供与モデル」。
     # 別途この軽量モデルを走らせ、その実時刻を kotoba のテキストへ移植して字幕ズレを抑える。
-    # "" で無効（synth 時刻＝従来の均等割りに戻す）。base=軽量/高速・推奨, small=精度やや上/重い。
-    kotoba_timing_donor: str = field(default_factory=lambda: _env("KOTOBA_TIMING_DONOR", "base"))
+    # "" で無効（synth 時刻＝従来の均等割りに戻す）。small=日本語精度高・推奨, base=軽量/高速だが日本語弱い。
+    kotoba_timing_donor: str = field(default_factory=lambda: _env("KOTOBA_TIMING_DONOR", "small"))
 
     # クリップ条件（TikTok の最適尺）
     clip_min_sec: float = 12.0

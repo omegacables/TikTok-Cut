@@ -1,20 +1,20 @@
 """kotoba-whisper のテキストに、別モデルの実単語タイムスタンプを移植する（torch 不要）。
 
-kotoba（蒸留モデル）は日本語テキストは優秀だが単語タイムスタンプを出さない。そこで base/small
-など「単語時刻を出せる faster-whisper モデル」を“タイミング供与役(donor)”として別途走らせ、その実時刻を
+kotoba（蒸留モデル）は日本語テキストは優秀だが単語タイムスタンプを出さない。そこで small/base
+など「単語時刻を出せる faster-whisper モデル」を"タイミング供与役(donor)"として別途走らせ、その実時刻を
 kotoba のテキストへ移す。テキストは 100% kotoba のまま（時刻だけ差し替える）。
 
-手法（同一動画キャッシュでの実測で最良だった構成）:
+手法 v2（時間窓ベースマッチング）:
   ① 両者を文字ストリーム化（各語の[start,end]を文字数で内挿）。句読点・空白は照合ノイズになるため除外。
-  ② difflib で文字列整合 → 一致ブロック(size>=2)をアンカーに。
+  ② 時間窓ベースで difflib マッチング（全体一括ではなく 20秒窓×10秒ステップの重複窓で実行）。
+     → donor の信頼できる時刻で窓を作り、kotoba 側は drift を考慮して広めに取る。
+     → 遠距離の偽マッチを防止し、アンカー密度を大幅に向上。
   ③ アンカーを「donor時刻が単調増加」する最長部分列(LIS)に限定（誤マッチ除去）。
-  ④ 一致文字は donor 時刻を採用。アンカー間の未一致は、間隔が短ければ線形補間、長ければ
-     kotoba 自身の synth 時刻にフォールバック（テキストが大きく食い違う区間で破綻させない）。
+  ④ 一致文字は donor 時刻を採用。アンカー間の未一致は線形補間（8秒以内）、
+     超える区間は kotoba の synth 時刻にフォールバック。
   ⑤ 文字時刻を語へ再集約（テキストは kotoba のものをそのまま使う）。
 
-実測（kotobaテキスト + base供与 vs large-v3正解, 同一動画）: 実時刻±0.3s 内 13%→51%、中央ズレ
-1.57s→0.28s。※kotoba のセグメント窓へのクランプは「kotoba 自身の崩れた時刻へ引き戻す」ため逆効果
-だったので行わない。依存は標準ライブラリの difflib のみ。失敗時は呼び出し側が synth へフォールバックする。
+依存は標準ライブラリの difflib のみ。失敗時は呼び出し側が synth へフォールバックする。
 """
 from __future__ import annotations
 
@@ -22,7 +22,6 @@ import bisect
 import difflib
 from dataclasses import dataclass
 
-# 照合から除外する記号（モデル間で付き方が違い、アンカーを乱すため）
 _PUNC = set(" 　、。．,.!?！？・「」『』…ー~〜")
 
 
@@ -54,7 +53,7 @@ def _char_stream(words):
             if ch in _PUNC:
                 continue
             chars.append(ch)
-            times.append(s + dur * ((j + 0.5) / n))   # 文字中点
+            times.append(s + dur * ((j + 0.5) / n))
             owner.append(wi)
     return "".join(chars), times, owner
 
@@ -84,11 +83,48 @@ def _lis_nondecreasing(pairs):
     return [pairs[i] for i in out_idx]
 
 
-def transfer_word_times(kotoba_words, donor_words, *, synth_fallback_gap: float = 2.0):
+def _windowed_anchors(kstr, ktimes, dstr, dtimes, window=20.0, step=10.0):
+    """時間窓ベースで文字マッチングし、アンカー候補を返す。
+
+    donor の信頼できる時刻で窓を定義し、kotoba 側は drift を考慮して広めの窓で取る。
+    重複窓の結果を統合し、先に見つかったマッチを優先（同一 kotoba 文字の重複排除）。
+    """
+    if not kstr or not dstr:
+        return []
+    max_t = max(dtimes[-1], ktimes[-1]) + 1.0
+    margin = window * 0.5
+    anchors: list[tuple[int, float]] = []
+    seen_k: set[int] = set()
+
+    t = 0.0
+    while t < max_t:
+        win_end = t + window
+        d_sel = [(i, kk) for i, kk in enumerate(dstr) if t <= dtimes[i] < win_end]
+        k_sel = [(i, kk) for i, kk in enumerate(kstr) if (t - margin) <= ktimes[i] < (win_end + margin)]
+        if d_sel and k_sel:
+            k_sub = "".join(ch for _, ch in k_sel)
+            d_sub = "".join(ch for _, ch in d_sel)
+            sm = difflib.SequenceMatcher(None, k_sub, d_sub, autojunk=False)
+            for a, b, size in sm.get_matching_blocks():
+                if size < 2:
+                    continue
+                for j in range(size):
+                    ki = k_sel[a + j][0]
+                    di = d_sel[b + j][0]
+                    if ki not in seen_k:
+                        seen_k.add(ki)
+                        anchors.append((ki, dtimes[di]))
+        t += step
+
+    anchors.sort(key=lambda x: x[0])
+    return anchors
+
+
+def transfer_word_times(kotoba_words, donor_words, *, synth_fallback_gap: float = 8.0):
     """kotoba_words のテキストはそのまま、時刻を donor_words の実時刻で置換した語列を返す。
 
     kotoba_words: kotoba のテキスト＋synth 時刻（保持する語）。.start/.end/.text を持つ。
-    donor_words:  実単語時刻を持つモデル（base/small 等）の語列。
+    donor_words:  実単語時刻を持つモデル（small/base 等）の語列。
     返り値: kotoba_words と同じ順・同じテキストで start/end を差し替えた _Word のリスト。
     """
     kwords = list(kotoba_words)
@@ -102,25 +138,16 @@ def transfer_word_times(kotoba_words, donor_words, *, synth_fallback_gap: float 
     if not kstr or not dstr:
         return [_Word(float(w.start), float(w.end), w.text) for w in kwords]
 
-    # ② difflib で一致ブロック（size>=2）をアンカーに
-    sm = difflib.SequenceMatcher(None, kstr, dstr, autojunk=False)
-    anchors = []   # (kotoba文字index, donor時刻)
-    for a, b, size in sm.get_matching_blocks():
-        if size < 2:
-            continue
-        for k in range(size):
-            anchors.append((a + k, dtimes[b + k]))
-
-    # ③ donor 時刻が単調増加する最長部分列に限定（誤マッチ除去）
+    anchors = _windowed_anchors(kstr, ktimes, dstr, dtimes)
     anchors = _lis_nondecreasing(anchors)
 
-    out_t = list(ktimes)   # 既定は kotoba synth 時刻（フォールバック）
+    out_t = list(ktimes)
     if anchors:
         anchor_idx = [k for k, _t in anchors]
         anchor_time = {k: t for k, t in anchors}
-        for k, t in anchors:               # ④ 一致文字 = donor 時刻
+        for k, t in anchors:
             out_t[k] = t
-        for ci in range(len(kstr)):         # アンカー間の未一致を埋める
+        for ci in range(len(kstr)):
             if ci in anchor_time:
                 continue
             p = bisect.bisect_left(anchor_idx, ci)
@@ -131,9 +158,7 @@ def transfer_word_times(kotoba_words, donor_words, *, synth_fallback_gap: float 
                 if (rt - lt) < synth_fallback_gap:
                     frac = (ci - left) / (right - left) if right != left else 0.0
                     out_t[ci] = lt + (rt - lt) * frac
-                # 大きく乖離する区間は synth 時刻のまま（out_t[ci] は既に ktimes）
 
-    # ⑤ 語へ再集約（テキストは kotoba のまま）。各語の文字時刻 min/max を採用。
     per_word_lo: dict[int, float] = {}
     per_word_hi: dict[int, float] = {}
     for ci, wi in enumerate(kowner):
@@ -148,12 +173,11 @@ def transfer_word_times(kotoba_words, donor_words, *, synth_fallback_gap: float 
         if wi in per_word_lo:
             s = per_word_lo[wi]
             e = max(s + 0.02, per_word_hi[wi])
-        else:                       # 句読点のみの語等（時刻寄与なし）→ 元の時刻
+        else:
             s = float(w.start)
             e = max(s + 0.02, float(w.end))
         result.append(_Word(round(s, 3), round(e, 3), w.text))
 
-    # 語の開始時刻が前後で逆転しないよう単調化（補間由来の軽微なねじれを解消）
     for i in range(1, len(result)):
         if result[i].start < result[i - 1].start:
             result[i].start = result[i - 1].start
