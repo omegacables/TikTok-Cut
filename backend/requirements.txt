@@ -1,0 +1,16 @@
+# --- Core pipeline ---
+faster-whisper>=1.1.0          # ローカル文字起こし（単語タイムスタンプ）
+tinysegmenter>=0.4            # 日本語の単語分割（字幕の自然な改行用・純Python）
+
+# --- LLM providers (いずれか1つあればよい。未導入でも heuristic fallback で動く) ---
+google-genai>=0.3.0            # Gemini（既定）。新SDK: `from google import genai`
+# openai>=1.40.0               # GPT を使う場合
+# anthropic>=0.39.0            # Claude を使う場合
+
+# --- Server (FastAPI フェーズで使用) ---
+fastapi>=0.110.0
+uvicorn>=0.29.0
+python-multipart>=0.0.9       # ファイルアップロード
+pydantic>=2.6.0
+
+# 注: ffmpeg / ffprobe は別途インストールし PATH に通すこと（pip では入らない）

@@ -1,0 +1,43 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+
+# Env / secrets
+.env
+*.local
+
+# Node / Electron
+node_modules/
+dist/
+out/
+app/node_modules/
+
+# Build artifacts
+release/
+build/
+build_pyi/
+_build_*.log
+
+# Output & models & temp
+output/
+_outtest/
+models/
+*.mp4
+*.ass
+*.vtt
+*.wav
+!assets/**/*.mp4
+
+# Large binaries
+packaging/ffmpeg/*.exe
+
+# Cache & working files
+.char_cache/
+効果音/
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,406 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>TikTok-Cut</title>
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+  <div id="licenseGate" class="license-gate" hidden>
+    <div class="license-box">
+      <div class="brand" style="font-size:1.5rem;">TikTok&#8209;Cut</div>
+      <h3>ライセンス認証</h3>
+      <p class="hint" style="text-align:left;margin:0 0 14px;">ご購入時の<b>メールアドレス</b>と<b>ライセンスキー</b>を入力してください。初回のみ必要です。</p>
+      <div class="field"><label for="licEmail">メールアドレス</label>
+        <input type="email" id="licEmail" placeholder="you@example.com"></div>
+      <div class="field"><label for="licKey">ライセンスキー</label>
+        <input type="text" id="licKey" placeholder="XXXX-XXXX-XXXX-XXXX"></div>
+      <div id="licMsg" class="error" hidden></div>
+      <button class="primary" onclick="submitLicense()">認証して開始</button>
+    </div>
+  </div>
+  <header class="topbar">
+    <div class="brand">TikTok&#8209;Cut</div>
+    <div class="brand-sub">配信アーカイブをアップロードして縦型ショート自動生成</div>
+    <nav class="header-links">
+      <a onclick="showInfo('about')">TikTok-Cutについて</a>
+      <a onclick="showInfo('usage')">使用方法</a>
+      <a onclick="showInfo('terms')">利用規約</a>
+      <a onclick="showInfo('privacy')">プライバシーポリシー</a>
+    </nav>
+    <button class="settings-btn" onclick="openSettings()">⚙ 設定</button>
+  </header>
+
+  <div id="infoModal" class="modal" hidden>
+    <div class="modal-box">
+      <h3 id="infoTitle"></h3>
+      <div id="infoBody" class="info-body"></div>
+      <div style="margin-top:16px;text-align:right;">
+        <button class="dl-btn" onclick="closeInfo()">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="settingsModal" class="modal" hidden>
+    <div class="modal-box">
+      <h3>設定</h3>
+      <div class="field">
+        <label for="setLlmPlan">AIプラン</label>
+        <select id="setLlmPlan">
+          <option value="gemini">スタンダード（Gemini 3.5 Flash）</option>
+          <option value="claude">プレミアム（Claude Sonnet 4.6）</option>
+        </select>
+        <p class="hint" style="text-align:left;margin-top:6px;">
+          スタンダードは高速処理向け。プレミアムは字幕補正・テロップ配置の品質が向上します。
+        </p>
+      </div>
+      <div class="field">
+        <label for="setWhisper">文字起こし精度（Whisper）</label>
+        <select id="setWhisper">
+          <option value="">自動（環境に最適なモデルを選択・おすすめ）</option>
+          <option value="large-v3">large-v3（最高精度・GPU向け）</option>
+          <option value="kotoba-tech/kotoba-whisper-v2.0-faster">kotoba-whisper v2（CPU向け・高速／精度はやや低め）</option>
+        </select>
+        <p class="hint" id="whisperGpuNote" style="text-align:left;margin-top:6px;">
+          <b>自動</b>がおすすめ：GPUがあれば large-v3、無ければ kotoba-whisper を選びます（CPUで large-v3 は極端に遅いため）。
+          kotoba 使用時は字幕の表示タイミングを自動補正します（初回のみ補正用モデルを追加DL・処理時間は少し増えます）。
+          手動指定も可。
+        </p>
+      </div>
+      <div class="field" id="outputDirField">
+        <label>クリップの保存先フォルダ</label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="text" id="setOutputDir" placeholder="（既定: アプリ管理フォルダ）" readonly
+            style="flex:1;min-width:0;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:.82rem;">
+          <button class="dl-btn" style="flex:0 0 auto" onclick="pickOutputDir()">選択</button>
+        </div>
+      </div>
+      <div class="field">
+        <label for="setHandle">TikTok ユーザー名（@ハンドル）<span class="opt">（ウォーターマーク・投稿文に使用）</span></label>
+        <input type="text" id="setHandle" placeholder="@your_name">
+      </div>
+      <div class="field" id="logoField">
+        <label>ロゴ画像 <span class="opt">（透過PNG推奨・ウォーターマークで隅に焼き込み）</span></label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="text" id="setLogo" placeholder="（未設定）" readonly
+            style="flex:1;min-width:0;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:.82rem;">
+          <button class="dl-btn" style="flex:0 0 auto" onclick="pickLogo()">選択</button>
+          <button class="dl-btn" style="flex:0 0 auto" onclick="clearLogo()">×</button>
+        </div>
+      </div>
+      <div class="field">
+        <label>ウォーターマーク / ロゴの表示 <span class="opt">（生成する全クリップの隅に焼き込み。ここで登録＆表示ON/OFF）</span></label>
+        <div class="brand-grid">
+          <label class="switch"><input type="checkbox" id="wmOn"><span class="switch-label">@ハンドルを表示</span></label>
+          <select id="wmPos" class="brand-pos">
+            <option value="tr" selected>右上</option><option value="tl">左上</option>
+            <option value="br">右下</option><option value="bl">左下</option>
+          </select>
+          <label class="switch"><input type="checkbox" id="logoOn"><span class="switch-label">ロゴ画像を表示</span></label>
+          <select id="logoPos" class="brand-pos">
+            <option value="br" selected>右下</option><option value="bl">左下</option>
+            <option value="tr">右上</option><option value="tl">左上</option>
+          </select>
+        </div>
+        <p class="palette-hint" id="brandHint"></p>
+      </div>
+      <div class="field">
+        <label for="setVocab">独自の用語登録 <span class="opt">（文字起こし精度UP・配信者名/専門用語など。カンマ/改行区切り）</span></label>
+        <textarea id="setVocab" rows="3" placeholder="例: ぺこら, ドン勝, わこつ"
+          style="width:100%;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:.82rem;resize:vertical;"></textarea>
+        <p class="hint" style="text-align:left;margin-top:6px;">若者言葉・ゲーム用語・方言の内蔵辞書に加えて、ここの単語も認識に反映します。</p>
+      </div>
+      <div class="field">
+        <label class="switch" style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;font-size:.85rem;">
+          <input type="checkbox" id="setCorrect" style="width:18px;height:18px;accent-color:var(--accent);">
+          <span style="color:var(--text);">AI字幕補正（誤字・ゲーム用語の補正）</span>
+        </label>
+        <p class="hint" style="text-align:left;margin-top:6px;">既定はOFF（Whisperの認識そのまま＝でっち上げ無し・声とのズレ無し）。ONにすると明らかな誤字のみテキストを補正します（時刻は変えません）。不明瞭音声では誤補正が増えることがあります。</p>
+      </div>
+      <div class="field">
+        <label>字幕プリセット <span class="opt">（作成画面のフォント・色・サイズをまとめて保存／呼び出し）</span></label>
+        <div class="preset-row">
+          <select id="presetSelect"><option value="">（プリセットを選択）</option></select>
+          <button type="button" class="mini-btn" onclick="applyPreset()">適用</button>
+          <button type="button" class="mini-btn" onclick="deletePreset()">×削除</button>
+        </div>
+        <div class="preset-row" style="margin-top:8px;">
+          <input type="text" id="presetName" placeholder="プリセット名"
+            style="flex:1;min-width:120px;padding:8px 10px;background:var(--surface-2);border:1px solid var(--border);border-radius:8px;color:var(--text);font-size:.85rem;">
+          <button type="button" class="mini-btn" onclick="saveCurrentPreset()">＋現在の設定を保存</button>
+        </div>
+        <p class="hint" style="text-align:left;margin-top:6px;">「現在の設定を保存」は作成画面で設定中のフォント/色/サイズを保存します。適用すると作成画面に反映されます（再起動不要）。</p>
+      </div>
+
+      <div id="settingsMsg" class="hint" style="text-align:left;"></div>
+      <div style="display:flex;gap:10px;margin-top:14px;">
+        <button class="primary" style="flex:1" onclick="saveSettings()">保存して再起動</button>
+        <button class="dl-btn" style="flex:0 0 auto" onclick="closeSettings()">閉じる</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- 字幕・効果音タイムラインのドラッグ用ツールチップ -->
+  <div id="subTooltip" class="sub-tooltip" hidden></div>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="create" onclick="switchTab('create')">作成</button>
+    <button class="tab" data-tab="result" id="resultTabBtn" onclick="switchTab('result')" disabled>
+      結果<span id="clipBadge" class="badge" hidden>0</span>
+    </button>
+    <button class="tab" data-tab="detail" id="detailTabBtn" onclick="switchTab('detail')" disabled>詳細編集</button>
+  </nav>
+
+  <!-- ===== 作成タブ ===== -->
+  <main id="tab-create" class="panel active">
+    <div class="card">
+      <div class="field">
+        <label for="urlInput">YouTube アーカイブ URL <span class="opt">（任意・字幕精度向上用）</span></label>
+        <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=...">
+      </div>
+
+      <div class="field">
+        <label for="titleInput">配信タイトル <span class="opt">（任意・固有名詞の精度向上）</span></label>
+        <input type="text" id="titleInput" placeholder="例: 〇〇の深夜雑談">
+      </div>
+
+      <div class="field">
+        <label>動画ファイル（MP4）<span class="req">必須</span></label>
+        <input type="file" id="fileInput" accept=".mp4,.mov,.mkv,.webm,.avi" hidden>
+        <button id="selectBtn" class="dropzone" onclick="selectVideo()">
+          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
+            <rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10,8 16,12 10,16"/>
+          </svg>
+          <span id="fileName">動画を選択</span>
+        </button>
+      </div>
+
+      <div class="field">
+        <label>切り抜きの選び方</label>
+        <div class="mode-tabs">
+          <button type="button" class="mode-tab active" data-mode="auto" onclick="switchCreateMode('auto')">おまかせ</button>
+          <button type="button" class="mode-tab" data-mode="prompt" onclick="switchCreateMode('prompt')">プロンプト入力</button>
+        </div>
+      </div>
+
+      <div id="autoMode">
+        <div class="field">
+          <label>狙うジャンル <span class="opt">（複数選択可・選ぶとそのジャンル向けにAIが最適化。未選択なら全体から自動）</span></label>
+          <div id="genreBox" class="genre-box"></div>
+        </div>
+      </div>
+
+      <div id="promptMode" hidden>
+        <div class="field">
+          <label for="promptInput">AIへの指示 <span class="opt">（どう切り抜くかを文章で。例の通りでOK）</span></label>
+          <textarea id="promptInput" rows="3"
+            placeholder="例: 10分あたりの面白い切り抜きをカット編集でお願い／神プレイと笑える掛け合いを中心に各30秒前後で"
+            style="width:100%;padding:12px 14px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:.92rem;resize:vertical;"></textarea>
+        </div>
+      </div>
+
+      <div class="settings">
+        <div class="field small">
+          <label for="clipCount">生成本数</label>
+          <select id="clipCount">
+            <option value="1">1 本</option>
+            <option value="3">3 本</option>
+            <option value="5" selected>5 本</option>
+            <option value="8">8 本</option>
+          </select>
+        </div>
+        <div class="field small">
+          <label for="reframe">画面構成（9:16）</label>
+          <select id="reframe" onchange="onReframeChange()">
+            <option value="crop" selected>中央クロップ（全画面）</option>
+            <option value="blur">背景ぼかし（おしゃれ）</option>
+            <option value="letterbox">レターボックス（上下に帯）</option>
+          </select>
+          <label class="color-item" id="lbColorField" style="display:none;flex-direction:row;align-items:center;gap:8px;margin-top:8px;justify-content:flex-start;">帯の色<input type="color" id="cLetterbox" value="#000000" style="width:46px;height:32px;flex:0 0 auto;"></label>
+        </div>
+        <div class="field small">
+          <label for="intro">冒頭の演出 <span class="opt">（トランジション）</span></label>
+          <select id="intro">
+            <option value="none" selected>なし</option>
+            <option value="zoom">ズームイン（パンチ）</option>
+            <option value="zoomout">ズームアウト</option>
+            <option value="slide">スライドイン（左から）</option>
+            <option value="slidedown">上から落とす</option>
+            <option value="spin">回転イン</option>
+            <option value="shake">シェイク</option>
+            <option value="glitch">グリッチ</option>
+            <option value="fade">フェード（黒）</option>
+            <option value="flash">フラッシュ（白）</option>
+          </select>
+        </div>
+        <div class="field small">
+          <label for="tempo">テンポ編集 <span class="opt">（不要部分カット）</span></label>
+          <select id="tempo">
+            <option value="off" selected>OFF（そのまま）</option>
+            <option value="content">AI内容ベース（おすすめ）</option>
+            <option value="silence">無音だけ詰める</option>
+            <option value="both">両方</option>
+          </select>
+        </div>
+        <div class="field small">
+          <label for="animSelect">字幕アニメーション <span class="opt">（出現の動き）</span></label>
+          <select id="animSelect">
+            <option value="default" selected>ポップイン（標準）</option>
+            <option value="none">なし</option>
+            <option value="fade">フェード</option>
+            <option value="pop">ポップ</option>
+            <option value="bounce">バウンス</option>
+            <option value="slide">スライドイン（パン）</option>
+            <option value="wipe">ワイプ</option>
+            <option value="breathe">ブリーズ（ふわっ）</option>
+            <option value="wave">ウェーブ（近似）</option>
+            <option value="flip">フリップ（めくり）</option>
+            <option value="zoombig">ズーム（特大→等倍）</option>
+            <option value="shake">シェイク（揺れ）</option>
+            <option value="spin">スピン（1回転）</option>
+            <option value="blurin">ブラー（ぼけ→鮮明）</option>
+          </select>
+        </div>
+        <div class="field small">
+          <label for="effectSelect">文字エフェクト <span class="opt">（装飾）</span></label>
+          <select id="effectSelect">
+            <option value="none" selected>なし</option>
+            <option value="glow">光彩（ふんわり発光）</option>
+            <option value="sparkle">キラキラ（粒子・近似）</option>
+            <option value="horror">ホラー（血色＋ゆれ）</option>
+          </select>
+        </div>
+        <div class="field small">
+          <label>反応テロップ <span class="opt">（AIが字幕内容から自動付与）</span></label>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <label class="switch" style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;font-size:.85rem;">
+              <input type="checkbox" id="laughOn" style="width:18px;height:18px;accent-color:var(--accent);">
+              <span style="color:var(--muted);">笑いに「ｗｗｗ」を入れる</span>
+            </label>
+            <label class="switch" style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;font-size:.85rem;">
+              <input type="checkbox" id="commentOn" style="width:18px;height:18px;accent-color:var(--accent);">
+              <span style="color:var(--muted);">コメント読み上げをチャット風に</span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="style-section">
+        <div class="field">
+          <label for="fontSelect">字幕フォント</label>
+          <select id="fontSelect"></select>
+          <div class="preview-stage" id="previewStage">
+            <span class="pv-tag">プレビュー</span>
+            <button type="button" class="pv-replay" onclick="applyPreviewFx()" title="アニメをもう一度再生">▶ 再生</button>
+            <div id="pvTitle" class="pv-title">タイトルの見え方</div>
+            <div id="pvCap" class="pv-cap">字幕の見え方 — 神回キター！？</div>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>色設定 <span class="opt">（色をクリック → 「よく使う色」から適用も可）</span></label>
+          <div class="color-row">
+            <label class="color-item">字幕<input type="color" id="cSub" value="#FFFFFF" data-role="sub"></label>
+            <label class="color-item">強調の色<input type="color" id="cHi" value="#FFE600" data-role="hi"></label>
+            <label class="color-item">縁取り<input type="color" id="cOut" value="#000000" data-role="out"></label>
+            <label class="color-item">タイトル<input type="color" id="cTitle" value="#FFFFFF" data-role="title"></label>
+          </div>
+          <div class="palette-head">
+            <span>よく使う色</span>
+            <button type="button" class="mini-btn" onclick="addPreset()">＋ 選択中の色を登録</button>
+          </div>
+          <div id="palette" class="palette"></div>
+          <p class="palette-hint">スウォッチをクリックで「最後に触れた色欄」へ適用。×で削除。</p>
+        </div>
+
+        <div class="field">
+          <label>文字サイズ・縁取り <span class="opt">（字幕とタイトルの大きさ／縁の太さ）</span></label>
+          <div class="slider-grid">
+            <label class="slider-item">字幕サイズ <b id="capSizeOut">74</b>
+              <input type="range" id="capSize" min="48" max="120" step="2" value="74"></label>
+            <label class="slider-item">字幕の縁取り <b id="capOutOut">6</b>
+              <input type="range" id="capOutline" min="0" max="16" step="1" value="6"></label>
+            <label class="slider-item">タイトルサイズ <b id="titleSizeOut">80</b>
+              <input type="range" id="titleSize" min="50" max="140" step="2" value="80"></label>
+            <label class="slider-item">タイトルの縁取り <b id="titleOutOut">8</b>
+              <input type="range" id="titleOutline" min="0" max="20" step="1" value="8"></label>
+          </div>
+        </div>
+
+        <div class="field">
+          <label>字幕の枠（背景ボックス）<span class="opt">（オンにすると縁取りの代わりに半透明の枠を表示）</span></label>
+          <div class="brand-grid">
+            <label class="switch"><input type="checkbox" id="boxOn"><span class="switch-label">枠を付ける</span></label>
+            <label class="color-item">枠の色<input type="color" id="cBox" value="#000000" data-role="box"></label>
+          </div>
+          <div class="slider-grid" style="margin-top:10px;">
+            <label class="slider-item">枠の大きさ（余白）<b id="boxPadOut">10</b>
+              <input type="range" id="boxPad" min="2" max="40" step="2" value="10"></label>
+          </div>
+        </div>
+      </div>
+
+      <button id="startBtn" class="primary" onclick="startProcess()">作成開始</button>
+      <p class="hint">動画は外部に送信されず、文字起こしは PC 内で実行されます。</p>
+    </div>
+
+    <div id="statusCard" class="card status" hidden>
+      <div class="status-step" id="statusStep">準備中...</div>
+      <div class="progress"><div class="progress-fill" id="progressFill"></div></div>
+      <div class="progress-pct" id="progressPct">0%</div>
+      <div id="errorBox" class="error" hidden></div>
+    </div>
+  </main>
+
+  <!-- ===== 詳細編集タブ ===== -->
+  <main id="tab-detail" class="panel">
+    <div class="detail-head">
+      <button class="dl-btn" onclick="switchTab('result')">← 結果に戻る</button>
+      <h3 id="detailTitle" class="detail-title"></h3>
+    </div>
+    <div class="detail-body">
+      <div class="detail-video-col">
+        <div class="detail-section-title">プレビュー（編集中の字幕がそのまま乗ります）</div>
+        <div class="detail-pv">
+          <video id="detailVideo" controls preload="metadata"></video>
+          <div class="ed-frame detail-pv-frame" id="detailPvFrame"></div>
+        </div>
+      </div>
+      <div class="detail-edit-col">
+        <div class="detail-section-title">字幕・効果音編集（タイムライン）</div>
+        <div id="detailEditor" class="clip-editor" data-job="" data-cid=""></div>
+        <div class="detail-save-bar">
+          <button class="ed-save detail-save" onclick="saveDetail(this)">保存して再作成（字幕・位置・効果音をまとめて）</button>
+          <span id="detailSaveStatus" class="ed-status"></span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ===== 結果タブ ===== -->
+  <main id="tab-result" class="panel">
+    <div id="bulkBar" class="bulk-bar" hidden>
+      <div class="bulk-head">
+        <div>
+          <div class="bulk-title">全クリップに字幕スタイルを一括適用</div>
+          <div class="bulk-sub">「作成」タブで設定した フォント・色・サイズ・縁取り・枠・アニメ・エフェクト を、生成済みの全クリップにまとめて反映します（位置は各クリップの設定を維持）。</div>
+        </div>
+        <div class="bulk-preview" id="bulkPreview">
+          <span class="bpv-tag">適用後の見え方</span>
+          <div id="bulkPvTitle" class="pv-title">タイトル</div>
+          <div id="bulkPvCap" class="pv-cap">字幕プレビュー</div>
+        </div>
+      </div>
+      <div class="bulk-actions">
+        <button class="primary bulk-apply" onclick="applyBulkStyle()">全クリップに適用して再作成</button>
+        <span id="bulkStatus" class="bulk-status"></span>
+      </div>
+      <div class="progress" id="bulkProgWrap" hidden><div class="progress-fill" id="bulkProgFill"></div></div>
+    </div>
+    <div id="clipGrid" class="clip-grid"></div>
+  </main>
+
+  <script src="/static/app.js"></script>
+</body>
+</html>

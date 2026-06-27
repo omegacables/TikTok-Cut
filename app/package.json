@@ -1,0 +1,56 @@
+{
+  "name": "tiktok-cut",
+  "version": "0.4.1",
+  "description": "配信アーカイブから TikTok 向け縦型ショートを自動生成するデスクトップアプリ",
+  "main": "main.js",
+  "author": "TikTok-Cut",
+  "scripts": {
+    "start": "electron .",
+    "dist": "electron-builder --win nsis"
+  },
+  "dependencies": {
+    "electron-updater": "^6.8.9"
+  },
+  "devDependencies": {
+    "electron": "^31.0.0",
+    "electron-builder": "^24.13.3"
+  },
+  "build": {
+    "appId": "com.tiktokcut.app",
+    "productName": "TikTok-Cut",
+    "publish": {
+      "provider": "github",
+      "owner": "omegacables",
+      "repo": "TikTok-Cut"
+    },
+    "directories": {
+      "output": "../release"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "splash.html",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": "../dist/TikTok-Cut-Backend",
+        "to": "backend"
+      },
+      {
+        "from": "../web",
+        "to": "web"
+      }
+    ],
+    "icon": "../icon.png",
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "perMachine": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}
