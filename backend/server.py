@@ -10,6 +10,7 @@ import argparse
 import datetime
 import json
 import os
+import re
 import shutil
 import threading
 import uuid
@@ -38,11 +39,27 @@ _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
 
 
-def _new_job_id() -> str:
-    """保存フォルダ名を「YYYYMMDD＋その日の連番」にする（例: 2026/06/20 の1本目 → 202606201）。
+def _sanitize_folder(name: str) -> str:
+    """ファイルシステムに安全なフォルダ名に変換する。"""
+    name = re.sub(r'[\\/:*?"<>|]', '', name)
+    name = re.sub(r'[\s　]+', ' ', name).strip().strip('.')
+    return name[:80] if name else ""
+
+
+def _new_job_id(title: str = "") -> str:
+    """保存フォルダ名を配信タイトル（あれば）、無ければ日付連番にする。
 
     _jobs_lock 下で呼ぶこと（連番の競合回避）。
     """
+    base = _sanitize_folder(title)
+    if base:
+        if not (OUTPUT_ROOT / base).exists():
+            return base
+        n = 2
+        while (OUTPUT_ROOT / f"{base}_{n}").exists():
+            n += 1
+        return f"{base}_{n}"
+
     today = datetime.datetime.now().strftime("%Y%m%d")
     n = 0
     try:
@@ -54,7 +71,7 @@ def _new_job_id() -> str:
     except OSError:
         pass
     n += 1
-    while (OUTPUT_ROOT / f"{today}{n}").exists():  # 念のため衝突回避
+    while (OUTPUT_ROOT / f"{today}{n}").exists():
         n += 1
     return f"{today}{n}"
 
@@ -250,7 +267,7 @@ async def process(
     video: UploadFile | None = File(None),
 ):
     with _jobs_lock:
-        job_id = _new_job_id()
+        job_id = _new_job_id(title)
     job_dir = OUTPUT_ROOT / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
 

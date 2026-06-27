@@ -1,20 +1,22 @@
 """kotoba-whisper のテキストに、別モデルの実単語タイムスタンプを移植する（torch 不要）。
 
-kotoba（蒸留モデル）は日本語テキストは優秀だが単語タイムスタンプを出さない。そこで small/base
-など「単語時刻を出せる faster-whisper モデル」を"タイミング供与役(donor)"として別途走らせ、その実時刻を
+kotoba（蒸留モデル）は日本語テキストは優秀だが単語タイムスタンプを出さない。そこで small 等
+「単語時刻を出せる faster-whisper モデル」を"タイミング供与役(donor)"として別途走らせ、その実時刻を
 kotoba のテキストへ移す。テキストは 100% kotoba のまま（時刻だけ差し替える）。
 
-手法 v2（時間窓ベースマッチング）:
-  ① 両者を文字ストリーム化（各語の[start,end]を文字数で内挿）。句読点・空白は照合ノイズになるため除外。
-  ② 時間窓ベースで difflib マッチング（全体一括ではなく 20秒窓×10秒ステップの重複窓で実行）。
-     → donor の信頼できる時刻で窓を作り、kotoba 側は drift を考慮して広めに取る。
-     → 遠距離の偽マッチを防止し、アンカー密度を大幅に向上。
-  ③ アンカーを「donor時刻が単調増加」する最長部分列(LIS)に限定（誤マッチ除去）。
-  ④ 一致文字は donor 時刻を採用。アンカー間の未一致は線形補間（8秒以内）、
-     超える区間は kotoba の synth 時刻にフォールバック。
-  ⑤ 文字時刻を語へ再集約（テキストは kotoba のものをそのまま使う）。
+手法 v3（バイアス補正付き時間窓マッチング）:
+  ① 両者を文字ストリーム化（各語の[start,end]を文字数で内挿）。句読点・空白は除外。
+  ② 時間窓ベースで difflib マッチング（30秒窓×15秒ステップの重複窓）。
+     → donor 時刻で窓を作り、kotoba 側は drift を考慮し広めに取る。
+  ③ アンカーを LIS（donor 時刻が単調増加な最長部分列）に限定。
+  ④ 一致文字は donor 時刻を採用。未一致文字:
+     a) 近いアンカー間（<10秒）→ 線形補間
+     b) 遠いアンカー間 → バイアス補正（最寄りアンカーの誤差を synth 時刻に加算）
+     c) 片側のみアンカーあり → 同じくバイアス補正
+     旧方式の「synth フォールバック」は廃止（均等割り時刻は大ズレの元凶）。
+  ⑤ 文字時刻を語へ再集約（テキストは kotoba のまま）。
 
-依存は標準ライブラリの difflib のみ。失敗時は呼び出し側が synth へフォールバックする。
+依存は標準ライブラリの difflib のみ。
 """
 from __future__ import annotations
 
@@ -83,7 +85,7 @@ def _lis_nondecreasing(pairs):
     return [pairs[i] for i in out_idx]
 
 
-def _windowed_anchors(kstr, ktimes, dstr, dtimes, window=20.0, step=10.0):
+def _windowed_anchors(kstr, ktimes, dstr, dtimes, window=30.0, step=15.0):
     """時間窓ベースで文字マッチングし、アンカー候補を返す。
 
     donor の信頼できる時刻で窓を定義し、kotoba 側は drift を考慮して広めの窓で取る。
@@ -92,7 +94,7 @@ def _windowed_anchors(kstr, ktimes, dstr, dtimes, window=20.0, step=10.0):
     if not kstr or not dstr:
         return []
     max_t = max(dtimes[-1], ktimes[-1]) + 1.0
-    margin = window * 0.5
+    margin = window * 0.7
     anchors: list[tuple[int, float]] = []
     seen_k: set[int] = set()
 
@@ -106,7 +108,7 @@ def _windowed_anchors(kstr, ktimes, dstr, dtimes, window=20.0, step=10.0):
             d_sub = "".join(ch for _, ch in d_sel)
             sm = difflib.SequenceMatcher(None, k_sub, d_sub, autojunk=False)
             for a, b, size in sm.get_matching_blocks():
-                if size < 2:
+                if size < 1:
                     continue
                 for j in range(size):
                     ki = k_sel[a + j][0]
@@ -120,12 +122,11 @@ def _windowed_anchors(kstr, ktimes, dstr, dtimes, window=20.0, step=10.0):
     return anchors
 
 
-def transfer_word_times(kotoba_words, donor_words, *, synth_fallback_gap: float = 8.0):
+def transfer_word_times(kotoba_words, donor_words, *, interp_gap: float = 10.0):
     """kotoba_words のテキストはそのまま、時刻を donor_words の実時刻で置換した語列を返す。
 
-    kotoba_words: kotoba のテキスト＋synth 時刻（保持する語）。.start/.end/.text を持つ。
-    donor_words:  実単語時刻を持つモデル（small/base 等）の語列。
-    返り値: kotoba_words と同じ順・同じテキストで start/end を差し替えた _Word のリスト。
+    近いアンカー間（< interp_gap）は線形補間、遠い場合はバイアス補正で synth 時刻を修正。
+    synth フォールバック（均等割り時刻への回帰）は行わない。
     """
     kwords = list(kotoba_words)
     if not kwords:
@@ -151,13 +152,23 @@ def transfer_word_times(kotoba_words, donor_words, *, synth_fallback_gap: float 
             if ci in anchor_time:
                 continue
             p = bisect.bisect_left(anchor_idx, ci)
-            left = anchor_idx[p - 1] if p > 0 else None
-            right = anchor_idx[p] if p < len(anchor_idx) else None
-            if left is not None and right is not None:
-                lt, rt = anchor_time[left], anchor_time[right]
-                if (rt - lt) < synth_fallback_gap:
-                    frac = (ci - left) / (right - left) if right != left else 0.0
+            left_i = anchor_idx[p - 1] if p > 0 else None
+            right_i = anchor_idx[p] if p < len(anchor_idx) else None
+
+            if left_i is not None and right_i is not None:
+                lt, rt = anchor_time[left_i], anchor_time[right_i]
+                if (rt - lt) < interp_gap:
+                    frac = (ci - left_i) / (right_i - left_i) if right_i != left_i else 0.0
                     out_t[ci] = lt + (rt - lt) * frac
+                else:
+                    if (ci - left_i) <= (right_i - ci):
+                        out_t[ci] = ktimes[ci] + (anchor_time[left_i] - ktimes[left_i])
+                    else:
+                        out_t[ci] = ktimes[ci] + (anchor_time[right_i] - ktimes[right_i])
+            elif left_i is not None:
+                out_t[ci] = ktimes[ci] + (anchor_time[left_i] - ktimes[left_i])
+            elif right_i is not None:
+                out_t[ci] = ktimes[ci] + (anchor_time[right_i] - ktimes[right_i])
 
     per_word_lo: dict[int, float] = {}
     per_word_hi: dict[int, float] = {}
