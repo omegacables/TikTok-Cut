@@ -4,6 +4,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 contextBridge.exposeInMainWorld('electronAPI', {
   isElectron: true,
   appVersion: ipcRenderer.sendSync('get-app-version'),
+  apiToken: ipcRenderer.sendSync('get-api-token'),
   // ネイティブのファイル選択ダイアログ → 選んだ動画の絶対パスを返す（アップロード不要）
   selectVideo: () => ipcRenderer.invoke('select-video'),
   // 生成済みクリップ（サーバ相対パス）を任意の場所へ保存

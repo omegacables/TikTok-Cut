@@ -20,14 +20,25 @@ class RenderError(RuntimeError):
 
 
 def check_ffmpeg(ffmpeg: str | None = None) -> None:
-    """ffmpeg の存在を確認。無ければ分かりやすいエラーを出す。"""
+    """ffmpeg の存在と実行可能性を確認。無ければ分かりやすいエラーを出す。"""
     import shutil
     cmd = ffmpeg or FFMPEG
     if shutil.which(cmd) is None and not Path(cmd).exists():
         raise RenderError(
-            "ffmpeg が見つかりません。ffmpeg をインストールして PATH に通してください。\n"
+            f"ffmpeg が見つかりません（検索パス: {cmd}）。"
+            "ffmpeg をインストールして PATH に通してください。\n"
             "https://ffmpeg.org/download.html"
         )
+    try:
+        proc = subprocess.run(
+            [cmd, "-version"],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding="utf-8", errors="replace", timeout=10,
+        )
+        ver = (proc.stdout or "").split("\n", 1)[0]
+        print(f"[info] ffmpeg OK: {ver}", flush=True)
+    except Exception as e:
+        raise RenderError(f"ffmpeg は存在しますが実行できません（{cmd}）: {e}") from e
 
 
 def replace_retry(src, dst, tries: int = 12, delay: float = 0.3) -> None:

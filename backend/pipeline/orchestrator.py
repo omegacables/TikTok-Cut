@@ -439,7 +439,13 @@ def run_job(
         result.clips.append(results_by_id[i])
     if errors_by_id:
         msg = f"{len(errors_by_id)}本のクリップ作成に失敗しました"
+        first_err = next(iter(errors_by_id.values()))
+        detail = str(first_err).strip().splitlines()[-1] if str(first_err).strip() else ""
+        if detail:
+            msg += f"（{detail}）"
         result.warning = (result.warning + " " + msg) if result.warning else msg
+    if errors_by_id and not results_by_id:
+        raise RuntimeError(result.warning or "すべてのクリップ作成に失敗しました")
 
     progress(100, "完了")
     (job_dir / "result.json").write_text(

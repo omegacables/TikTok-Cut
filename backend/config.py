@@ -284,7 +284,7 @@ class TitleStyle:
 class Settings:
     # LLM
     llm_provider: str = field(default_factory=lambda: _env("LLM_PROVIDER", "gemini"))
-    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "gemini-3.5-flash"))
+    llm_model: str = field(default_factory=lambda: _env("LLM_MODEL", "gemini-2.5-flash"))
     gemini_api_key: str = field(default_factory=_gemini_key)
     gemini_proxy_url: str = field(default_factory=lambda: _env("GEMINI_PROXY_URL"))
     openai_api_key: str = field(default_factory=lambda: _env("OPENAI_API_KEY"))

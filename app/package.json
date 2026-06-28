@@ -1,6 +1,6 @@
 {
   "name": "tiktok-cut",
-  "version": "0.5.2",
+  "version": "0.5.3",
   "description": "配信アーカイブから TikTok 向け縦型ショートを自動生成するデスクトップアプリ",
   "main": "main.js",
   "author": "TikTok-Cut",

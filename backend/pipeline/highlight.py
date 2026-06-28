@@ -169,11 +169,12 @@ def _sanitize(
 
 
 def _heuristic(t: Transcript, clip_count: int) -> list[Highlight]:
-    """API キー無しの代替: 動画を N 分割し、各区間で最も発話が密な箇所を中心に切る。"""
+    """API キー無しの代替: 動画を N 分割し、各区間で発話密度が高い窓を切る。"""
     duration = t.duration or (t.segments[-1].end if t.segments else 0.0)
     if duration <= 0 or not t.segments:
         return []
-    target = min(SETTINGS.clip_max_sec, max(SETTINGS.clip_min_sec, 40.0))
+    cmin, cmax = SETTINGS.clip_min_sec, SETTINGS.clip_max_sec
+    window_sizes = sorted({cmin, min(22.0, cmax), min(32.0, cmax), min(42.0, cmax)})
     bucket = duration / clip_count
     highlights: list[Highlight] = []
     for i in range(clip_count):
@@ -181,12 +182,34 @@ def _heuristic(t: Transcript, clip_count: int) -> list[Highlight]:
         in_bucket = [s for s in t.segments if b_start <= s.start < b_end and s.text]
         if not in_bucket:
             continue
-        # 発話量（文字数）が最大のセグメントを山とみなす
-        peak = max(in_bucket, key=lambda s: len(s.text))
-        center = (peak.start + peak.end) / 2
-        start = max(b_start, center - target / 2)
-        end = min(duration, start + target)
-        start = max(0.0, end - target)
+
+        best: tuple[float, float, float] | None = None  # score, start, end
+        anchors = sorted({b_start, *[s.start for s in in_bucket], *[max(b_start, s.end - cmin) for s in in_bucket]})
+        for length in window_sizes:
+            if length <= 0:
+                continue
+            for a in anchors:
+                start = max(b_start, min(a, b_end - min(length, b_end - b_start)))
+                end = min(b_end, start + length)
+                if end - start < cmin * 0.75:
+                    continue
+                segs = [s for s in in_bucket if s.end > start and s.start < end]
+                chars = sum(len(s.text.strip()) for s in segs)
+                speech_span = sum(max(0.0, min(s.end, end) - max(s.start, start)) for s in segs)
+                density = chars / max(1.0, end - start)
+                coverage = speech_span / max(1.0, end - start)
+                score = density * 10.0 + coverage * 25.0 + len(segs) * 1.5 - (end - start) * 0.08
+                if best is None or score > best[0]:
+                    best = (score, start, end)
+        if best is None:
+            peak = max(in_bucket, key=lambda s: len(s.text))
+            center = (peak.start + peak.end) / 2
+            start = max(b_start, center - cmin / 2)
+            end = min(duration, start + cmin)
+            start = max(0.0, end - cmin)
+        else:
+            _, start, end = best
+
         text = " ".join(s.text for s in t.segments if start <= s.start < end)
         title = (text[:18] + "…") if len(text) > 18 else text
         highlights.append(

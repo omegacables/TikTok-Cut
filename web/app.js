@@ -2,6 +2,30 @@
 // ネイティブのファイル選択/保存を使い、無ければブラウザのアップロード/DLにフォールバック。
 
 const electron = window.electronAPI || null;
+const _nativeFetch = window.fetch.bind(window);
+window.fetch = (input, init = {}) => {
+  const token = electron && electron.apiToken;
+  if (!token) return _nativeFetch(input, init);
+  const url = typeof input === 'string' ? input : (input && input.url) || '';
+  let sameOriginApi = false;
+  try {
+    const u = new URL(url, window.location.href);
+    sameOriginApi = u.origin === window.location.origin && u.pathname.startsWith('/api/');
+  } catch (_) {
+    sameOriginApi = String(url).startsWith('/api/');
+  }
+  if (!sameOriginApi) return _nativeFetch(input, init);
+  const headers = new Headers(init.headers || (input && input.headers) || {});
+  headers.set('X-TikTokCut-Token', token);
+  return _nativeFetch(input, { ...init, headers });
+};
+function apiUrl(path) {
+  const token = electron && electron.apiToken;
+  if (!token) return path;
+  const u = new URL(path, window.location.href);
+  u.searchParams.set('token', token);
+  return u.pathname + u.search;
+}
 let selectedFile = null;   // ブラウザ: File
 let selectedPath = null;   // Electron: ローカル絶対パス
 let currentJobId = null;
@@ -241,8 +265,8 @@ function renderClips(clips) {
   const grid = document.getElementById('clipGrid');
   grid.innerHTML = '';
   clips.forEach(c => {
-    const src = '/api/download/' + encodeURI(c.file_path);
-    const poster = c.thumbnail_path ? '/api/download/' + encodeURI(c.thumbnail_path) : '';
+    const src = apiUrl('/api/download/' + encodeURI(c.file_path));
+    const poster = c.thumbnail_path ? apiUrl('/api/download/' + encodeURI(c.thumbnail_path)) : '';
     const job = (c.file_path || '').split(/[\\/]/)[0];
     const tags = (c.hashtags || []).map(h => '<span class="tag">#' + esc(h) + '</span>').join(' ');
     const card = document.createElement('div');
@@ -282,7 +306,7 @@ function downloadClip(path, title) {
     electron.saveFile(decodeURI(path), title + '.mp4');
   } else {
     const a = document.createElement('a');
-    a.href = '/api/download/' + path;
+    a.href = apiUrl('/api/download/' + path);
     a.download = title + '.mp4';
     document.body.appendChild(a); a.click(); a.remove();
   }
@@ -1167,7 +1191,7 @@ function openDetail(job, cid, title) {
   const v = oldV.cloneNode(false);
   oldV.replaceWith(v);
   document.getElementById('detailTitle').textContent = cid + '. ' + (title || '無題');
-  v.src = '/api/download/' + job + '/clip_' + ('0' + cid).slice(-2) + '.mp4?t=' + Date.now();
+  v.src = apiUrl('/api/download/' + job + '/clip_' + ('0' + cid).slice(-2) + '.mp4?t=' + Date.now());
   v.load();
   ed.dataset.job = job; ed.dataset.cid = cid; ed.dataset.loaded = '';
   ed.hidden = false; ed.innerHTML = '';
@@ -1248,8 +1272,8 @@ function _vRelease(cap) {
 function _vRestore(cap, job, cid) {
   if (!cap || !cap.v) return;
   const bust = '?t=' + Date.now();
-  cap.v.src = (cap.src || ('/api/download/' + job + '/clip_' + ('0' + cid).slice(-2) + '.mp4')) + bust;
-  if (cap.poster) cap.v.poster = cap.poster + bust;
+  cap.v.src = apiUrl((cap.src || ('/api/download/' + job + '/clip_' + ('0' + cid).slice(-2) + '.mp4')).split('?')[0] + bust);
+  if (cap.poster) cap.v.poster = apiUrl(cap.poster + bust);
   cap.v.load();
 }
 // 再作成後に結果グリッド側のカード動画も更新（詳細ページから編集した場合の同期）
@@ -1259,8 +1283,8 @@ function _bustGridCard(job, cid) {
   const v = card.querySelector('video');
   if (v) {
     const b = '?t=' + Date.now();
-    v.src = v.src.split('?')[0] + b;
-    if (v.poster) v.poster = v.poster.split('?')[0] + b;
+    v.src = apiUrl(new URL(v.src, window.location.href).pathname + b);
+    if (v.poster) v.poster = apiUrl(new URL(v.poster, window.location.href).pathname + b);
     v.load();
   }
   return card;
@@ -1304,7 +1328,7 @@ async function loadEditor(ed) {
     // 位置は常に明示（既定でも \pos 中央アンカーで描画）→ プレビューと実際の位置を一致させる。
     ed._titlePos = st.title_pos || { x: 0.5, y: 0.16 };
     ed._capPos = st.caption_pos || { x: 0.5, y: 0.72 };
-    const poster = '/api/download/' + job + '/clip_' + ('0' + cid).slice(-2) + '.jpg';
+    const poster = apiUrl('/api/download/' + job + '/clip_' + ('0' + cid).slice(-2) + '.jpg');
     ed._poster = poster;   // 字幕調整モーダルのプレビュー背景
     const capSz = st.caption_size || 74, ttlSz = st.title_size || 80;
     const capOl = st.outline_width != null ? st.outline_width : 6;
@@ -2378,8 +2402,8 @@ function pollBulk(bulkId) {
 function bustAllClips() {
   const bust = '?t=' + Date.now();
   document.querySelectorAll('.clip-card video').forEach(v => {
-    v.src = v.src.split('?')[0] + bust;
-    if (v.poster) v.poster = v.poster.split('?')[0] + bust;
+    v.src = apiUrl(new URL(v.src, window.location.href).pathname + bust);
+    if (v.poster) v.poster = apiUrl(new URL(v.poster, window.location.href).pathname + bust);
     v.load();
   });
   // 開いている（編集中の）UIは未保存の入力を失わないよう触らない。
@@ -2467,7 +2491,6 @@ async function saveSettings() {
   const plan = document.getElementById('setLlmPlan').value;
   const s = {
     llmProvider: plan,
-    llmModel: plan === 'claude' ? 'claude-sonnet-4-6' : 'gemini-3.5-flash',
     whisperModel: document.getElementById('setWhisper').value,
     outputDir: document.getElementById('setOutputDir').value || undefined,
     tiktokHandle: document.getElementById('setHandle').value.trim() || undefined,

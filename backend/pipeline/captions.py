@@ -49,6 +49,37 @@ def _dialogue(start: float, end: float, style: str, lines: list[str], override: 
     return f"Dialogue: {layer},{_t(start)},{_t(end)},{style},,0,0,0,,{override}{text}"
 
 
+def _display_telops(telops: list[dict], clip_duration: float) -> list[dict]:
+    """焼き込み時だけ字幕の表示時間を少し延ばす。
+
+    Whisper の単語時刻どおりだと短い発話が一瞬で消え、動画上では「字幕が少ない」
+    ように見える。編集データの時刻は変えず、ASS 出力時だけ自然な範囲で延長する。
+    """
+    ordered = sorted((dict(tp) for tp in telops), key=lambda tp: float(tp.get("start", 0)))
+    out: list[dict] = []
+    for i, tp in enumerate(ordered):
+        try:
+            s = max(0.0, min(clip_duration, float(tp.get("start", 0))))
+            e = max(s + 0.2, min(clip_duration, float(tp.get("end", s + 0.2))))
+        except (TypeError, ValueError):
+            continue
+        next_s = clip_duration
+        if i + 1 < len(ordered):
+            try:
+                next_s = max(s, min(clip_duration, float(ordered[i + 1].get("start", clip_duration))))
+            except (TypeError, ValueError):
+                next_s = clip_duration
+        min_end = s + 1.35
+        max_end = e + 2.6
+        target = max(e, min_end)
+        if next_s - e <= 2.8:
+            target = max(target, next_s - 0.05)
+        tp["start"] = round(s, 3)
+        tp["end"] = round(max(s + 0.2, min(clip_duration, next_s - 0.05, max_end, target)), 3)
+        out.append(tp)
+    return out
+
+
 # ポップイン演出（animate=True 時に各種テロップへ付与する ASS override）
 _ANIM_TITLE = r"{\fad(220,0)\fscx72\fscy72\t(0,230,\fscx100\fscy100)}"
 _ANIM_HOOK = r"{\fad(140,90)\fscx55\fscy55\t(0,200,\fscx108\fscy108)\t(200,260,\fscx100\fscy100)}"
@@ -729,6 +760,7 @@ def build_ass(
     if telops is None:
         telops = _segment_telops(words or [], _max_chars(cap_size), cap.max_lines,
                                  cap.max_phrase_sec)
+    telops = _display_telops(telops, clip_duration)
 
     is_glow = (effect or "").lower() == "glow"
     eff_ov = "" if is_glow else _effect_group(effect)  # glow は2層で別処理。alert/WM には付けない

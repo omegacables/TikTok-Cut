@@ -16,17 +16,16 @@ function _fmtKey(hex) { return hex.slice(0, 16).toUpperCase().replace(/(.{4})/g,
 function _licKeyFor(email) {
   return _fmtKey(crypto.createHmac('sha256', LICENSE_SECRET).update(_normEmail(email)).digest('hex'));
 }
-const MASTER_KEY = _fmtKey(crypto.createHmac('sha256', LICENSE_SECRET).update('::MASTER::').digest('hex'));
 function _normKey(k) { return String(k || '').toUpperCase().replace(/[^A-Z0-9]/g, ''); }
 function validateLicense(email, key) {
   const nk = _normKey(key);
   if (!nk) return false;
-  if (nk === _normKey(MASTER_KEY)) return true;        // マスターキーは任意メールで通る
   if (!_normEmail(email)) return false;
   return nk === _normKey(_licKeyFor(email));
 }
 
 const PROJECT_ROOT = path.join(__dirname, '..');
+const API_TOKEN = crypto.randomBytes(32).toString('hex');
 
 // バックエンドと一致させる出力先（パッケージ版は書き込み可能な LOCALAPPDATA 配下）
 function resolveOutputRoot() {
@@ -136,10 +135,9 @@ function startBackend(port) {
     const { cmd, args } = backendCommand(port);
     const s = loadSettings();
     const extra = {};
-    const proxyUrl = s.geminiProxyUrl || 'https://dssutndhlawyjvyneyft.supabase.co/functions/v1/gemini-proxy';
-    extra.GEMINI_PROXY_URL = proxyUrl;
+    if (s.geminiProxyUrl) extra.GEMINI_PROXY_URL = String(s.geminiProxyUrl);
     if (s.llmProvider) extra.LLM_PROVIDER = s.llmProvider;
-    if (s.llmModel) extra.LLM_MODEL = s.llmModel;
+    if (s.llmModel && s.llmModel !== 'gemini-3.5-flash') extra.LLM_MODEL = s.llmModel;
     if (s.whisperModel) extra.WHISPER_MODEL = s.whisperModel;
     if (s.tiktokHandle) extra.TIKTOKCUT_HANDLE = String(s.tiktokHandle);
     if (s.logoPath) extra.TIKTOKCUT_LOGO = String(s.logoPath);
@@ -151,6 +149,7 @@ function startBackend(port) {
         ...process.env, PYTHONUTF8: '1',
         TIKTOKCUT_OUTPUT: OUTPUT_ROOT,
         TIKTOKCUT_WEB: resolveWebDir(),
+        TIKTOKCUT_API_TOKEN: API_TOKEN,
         ...extra,
       },
       windowsHide: true,
@@ -245,7 +244,9 @@ ipcMain.handle('select-video', async () => {
 
 // ---- IPC: 生成クリップの保存 ----
 ipcMain.handle('save-file', async (_e, serverPath, saveName) => {
-  const abs = path.join(OUTPUT_ROOT, serverPath);
+  const root = path.resolve(OUTPUT_ROOT);
+  const abs = path.resolve(root, String(serverPath || ''));
+  if (abs !== root && !abs.startsWith(root + path.sep)) return { error: '不正なパスです' };
   if (!fs.existsSync(abs)) return { error: 'ファイルが見つかりません' };
   const res = await dialog.showSaveDialog(mainWindow, {
     defaultPath: saveName || path.basename(abs),
@@ -289,6 +290,7 @@ ipcMain.handle('save-license', (_e, email, key) => {
 });
 
 ipcMain.on('get-app-version', (e) => { e.returnValue = app.getVersion(); });
+ipcMain.on('get-api-token', (e) => { e.returnValue = API_TOKEN; });
 
 // ---- IPC: 設定（Gemini APIキー等） ----
 ipcMain.handle('get-settings', () => {
@@ -299,7 +301,9 @@ ipcMain.handle('get-settings', () => {
   return s;
 });
 ipcMain.handle('save-settings', (_e, s) => {
-  const out = { llmProvider: s.llmProvider || 'gemini', llmModel: s.llmModel, whisperModel: s.whisperModel };
+  const out = { llmProvider: s.llmProvider || 'gemini', whisperModel: s.whisperModel };
+  if (s.llmModel && s.llmModel !== 'gemini-3.5-flash') out.llmModel = s.llmModel;
+  if (s.geminiProxyUrl) out.geminiProxyUrl = String(s.geminiProxyUrl);
   if (s.outputDir) out.outputDir = s.outputDir;
   if (s.tiktokHandle) out.tiktokHandle = String(s.tiktokHandle);
   if (s.logoPath) out.logoPath = String(s.logoPath);

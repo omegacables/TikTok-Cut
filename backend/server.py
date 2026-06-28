@@ -19,11 +19,9 @@ from dataclasses import asdict
 from pathlib import Path
 
 import uvicorn
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-
-import re
 
 from .config import (FONTS, FONTS_DIR, OUTPUT_ROOT, PREFS_FILE, PROJECT_DIR, SETTINGS,
                      SFX, SFX_DIR, valid_font)
@@ -35,8 +33,20 @@ WEB_DIR = (Path(os.environ["TIKTOKCUT_WEB"]).resolve()
            if os.environ.get("TIKTOKCUT_WEB") else (PROJECT_DIR / "web").resolve())
 
 _PORT = 8000
+API_TOKEN = os.environ.get("TIKTOKCUT_API_TOKEN", "").strip()
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+
+
+def _output_path(*parts: str | int) -> Path:
+    target = OUTPUT_ROOT.joinpath(*(str(p) for p in parts)).resolve()
+    if target != OUTPUT_ROOT and OUTPUT_ROOT not in target.parents:
+        raise HTTPException(403, "不正なパス")
+    return target
+
+
+def _job_dir(job_id: str) -> Path:
+    return _output_path(job_id)
 
 
 def _sanitize_folder(name: str) -> str:
@@ -80,6 +90,8 @@ def _new_job_id(title: str = "") -> str:
 async def lifespan(_app: FastAPI):
     OUTPUT_ROOT.mkdir(parents=True, exist_ok=True)
     # ffmpeg の存在チェック（無いと生成時にクラッシュするため起動時に警告）
+    from .config import FFMPEG
+    print(f"[info] ffmpeg = {FFMPEG}", flush=True)
     try:
         from .pipeline.render import check_ffmpeg
         check_ffmpeg()
@@ -90,6 +102,15 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="TikTok-Cut", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def require_api_token(request: Request, call_next):
+    if API_TOKEN and request.url.path.startswith("/api/"):
+        supplied = request.headers.get("X-TikTokCut-Token") or request.query_params.get("token")
+        if supplied != API_TOKEN:
+            return JSONResponse({"detail": "不正なリクエストです"}, status_code=403)
+    return await call_next(request)
 
 if WEB_DIR.exists():
     app.mount("/static", StaticFiles(directory=str(WEB_DIR)), name="static")
@@ -210,6 +231,8 @@ def _run(job_id: str, src: str, clip_count: int, meta_title: str | None,
             comment_on=comment_on,
             progress=lambda p, s: _set(job_id, progress=p, step=s),
         )
+        if not result.clips:
+            raise RuntimeError(result.warning or "クリップを作成できませんでした")
         _set(
             job_id,
             status="completed",
@@ -268,8 +291,8 @@ async def process(
 ):
     with _jobs_lock:
         job_id = _new_job_id(title)
-    job_dir = OUTPUT_ROOT / job_id
-    job_dir.mkdir(parents=True, exist_ok=True)
+        job_dir = _job_dir(job_id)
+        job_dir.mkdir(parents=True, exist_ok=False)
 
     if video is not None:
         suffix = Path(video.filename or "source.mp4").suffix or ".mp4"
@@ -278,6 +301,8 @@ async def process(
             shutil.copyfileobj(video.file, f)
         src = str(dest)
     elif video_path:
+        if not API_TOKEN:
+            raise HTTPException(403, "ローカルパス指定はアプリ版のみ利用できます")
         if not Path(video_path).exists():
             raise HTTPException(400, "指定の動画ファイルが見つかりません")
         src = video_path
@@ -353,7 +378,7 @@ def status(job_id: str):
         if job:
             return dict(job)
     # メモリに無ければディスクの result.json から復元（再起動後など）
-    rj = OUTPUT_ROOT / job_id / "result.json"
+    rj = _output_path(job_id, "result.json")
     if rj.exists():
         data = json.loads(rj.read_text(encoding="utf-8"))
         return {
@@ -372,7 +397,7 @@ def status(job_id: str):
 @app.get("/api/clip/{job}/{cid}")
 def get_clip(job: str, cid: int):
     """手動修正UI用: クリップの編集データ（タイトル/テロップ）を返す。"""
-    mf = OUTPUT_ROOT / job / f"clip_{cid:02d}.json"
+    mf = _output_path(job, f"clip_{cid:02d}.json")
     if not mf.exists():
         raise HTTPException(404, "クリップ情報が見つかりません")
     m = json.loads(mf.read_text(encoding="utf-8"))
@@ -394,12 +419,12 @@ def clip_waveform(job: str, cid: int, n: int = 400):
     mp4 の mtime をキーに clip_XX.peaks.json へキャッシュ（再描画で mp4 が更新されると自動失効）。
     """
     from .pipeline import audio
-    mp4 = OUTPUT_ROOT / job / f"clip_{cid:02d}.mp4"
+    mp4 = _output_path(job, f"clip_{cid:02d}.mp4")
     if not mp4.exists():
         raise HTTPException(404, "クリップが見つかりません")
     n = max(50, min(2000, int(n)))
     mtime = mp4.stat().st_mtime
-    cache = OUTPUT_ROOT / job / f"clip_{cid:02d}.peaks.json"
+    cache = _output_path(job, f"clip_{cid:02d}.peaks.json")
     if cache.exists():
         try:
             cached = json.loads(cache.read_text(encoding="utf-8"))
@@ -408,7 +433,7 @@ def clip_waveform(job: str, cid: int, n: int = 400):
         except (ValueError, OSError, KeyError):
             pass
     peaks = audio.waveform_peaks(mp4, n=n)
-    mf = OUTPUT_ROOT / job / f"clip_{cid:02d}.json"
+    mf = _output_path(job, f"clip_{cid:02d}.json")
     dur = 0.0
     if mf.exists():
         try:
@@ -426,7 +451,7 @@ def clip_waveform(job: str, cid: int, n: int = 400):
 @app.post("/api/clip/{job}/{cid}")
 def update_clip(job: str, cid: int, payload: dict = Body(...)):
     """編集（タイトル/テロップ/alert切替）を反映し、そのクリップだけ再描画する。"""
-    mf = OUTPUT_ROOT / job / f"clip_{cid:02d}.json"
+    mf = _output_path(job, f"clip_{cid:02d}.json")
     if not mf.exists():
         raise HTTPException(404, "クリップ情報が見つかりません")
     m = json.loads(mf.read_text(encoding="utf-8"))
@@ -541,7 +566,7 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
 
     mf.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
-        render_from_manifest(m["input_video"], OUTPUT_ROOT / job, m)
+        render_from_manifest(m["input_video"], _job_dir(job), m)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"再作成に失敗しました: {e}")
     return {"ok": True, "file_path": f"{job}/clip_{cid:02d}.mp4",
@@ -587,7 +612,7 @@ def _run_bulk(bulk_id: str, job_dir: Path, manifests: list[Path], patch: dict) -
 @app.post("/api/clips/{job}/bulk")
 def bulk_style(job: str, payload: dict = Body(...)):
     """字幕スタイルを全クリップへ一括適用し、バックグラウンドで再作成する。"""
-    job_dir = OUTPUT_ROOT / job
+    job_dir = _job_dir(job)
     if not job_dir.exists():
         raise HTTPException(404, "ジョブが見つかりません")
     style = payload.get("style")
@@ -618,7 +643,7 @@ def _extend_clip(job: str, m: dict, ext_s: float, ext_e: float) -> None:
     """
     from .pipeline import captions
     from .pipeline.transcribe import Transcript
-    tpath = OUTPUT_ROOT / job / "transcript.json"
+    tpath = _output_path(job, "transcript.json")
     if not tpath.exists():
         return
     t = Transcript.from_json(json.loads(tpath.read_text(encoding="utf-8")))
@@ -665,9 +690,7 @@ def _extend_clip(job: str, m: dict, ext_s: float, ext_e: float) -> None:
 
 @app.get("/api/download/{path:path}")
 def download(path: str):
-    target = (OUTPUT_ROOT / path).resolve()
-    if OUTPUT_ROOT not in target.parents and target != OUTPUT_ROOT:
-        raise HTTPException(403, "不正なパス")
+    target = _output_path(path)
     if not target.exists() or not target.is_file():
         raise HTTPException(404, "ファイルが見つかりません")
     return FileResponse(str(target))
