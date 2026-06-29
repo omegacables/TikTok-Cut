@@ -51,7 +51,7 @@ def _job_dir(job_id: str) -> Path:
 
 def _sanitize_folder(name: str) -> str:
     """ファイルシステムに安全なフォルダ名に変換する。"""
-    name = re.sub(r'[\\/:*?"<>|]', '', name)
+    name = re.sub(r'[\\/:*?"<>|#%&\';\[\](){}!@^`~\x00-\x1f]', '', name)
     name = re.sub(r'[\s　]+', ' ', name).strip().strip('.')
     return name[:80] if name else ""
 

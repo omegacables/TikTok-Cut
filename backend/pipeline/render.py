@@ -70,6 +70,8 @@ def _run(args: list[str], cwd: Path | None = None) -> None:
     )
     if proc.returncode != 0:
         tail = "\n".join((proc.stderr or "").strip().splitlines()[-12:])
+        cmd_str = " ".join(args[:6]) + " ..." if len(args) > 6 else " ".join(args)
+        print(f"[render] ffmpeg failed: {cmd_str}\n  cwd={cwd}\n  stderr(tail)={tail}", flush=True)
         raise RenderError(f"ffmpeg 失敗 (code {proc.returncode}):\n{tail}")
 
 
