@@ -149,6 +149,63 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
     return out_mp4, thumb
 
 
+def _preflight(job_dir: Path, input_video: Path) -> None:
+    """ジョブ冒頭の環境診断。job_dir/debug.log にヘッダを書き、致命的問題はエラーコード付きで即停止。
+
+    エラーは render.RenderError('[Exxx] …') として送出し、server が job.error に格納→UI 表示する。
+    パス文字コード問題は ASCII 一時フォルダ描画で吸収するため、ここでは警告ログのみ（停止しない）。
+    """
+    import shutil as _shutil
+    import sys as _sys
+    from ..config import FFMPEG, OUTPUT_ROOT
+
+    render.jlog(f"==== TikTok-Cut job @ {job_dir.name} ====")
+    render.jlog(f"PY={_sys.version.split()[0]} FROZEN={getattr(_sys, 'frozen', False)}")
+    render.jlog(f"FFMPEG={FFMPEG}")
+    try:
+        render.check_ffmpeg()   # E101: ffmpeg が起動できない
+    except render.RenderError as e:
+        raise render.RenderError(f"[E101] {e}") from e
+    try:
+        render.jlog(f"NVENC_AVAILABLE={render._nvenc_available()}")
+    except Exception:
+        pass
+    import locale as _locale
+    cp = _locale.getpreferredencoding(False)
+    render.jlog(f"CODEPAGE={cp}")
+    render.jlog(f"OUTPUT_ROOT={OUTPUT_ROOT!r} ANSI_SAFE={render.ansi_safe(OUTPUT_ROOT)}")
+    render.jlog(f"JOB_DIR={str(job_dir)!r} ANSI_SAFE={render.ansi_safe(job_dir)} LEN={len(str(job_dir))}")
+    render.jlog(f"INPUT={str(input_video)!r} ANSI_SAFE={render.ansi_safe(input_video)}")
+    if not render.ansi_safe(job_dir) or not render.ansi_safe(input_video):
+        render.jlog("[E201/E203] 非ANSIパスを検出 → ASCII一時フォルダ経由で描画します（自動対応）。")
+
+    # E202: パス長（MAX_PATH 260 配慮。clip_NN.mp4 / .ass 等の余白を確保）
+    if len(str(job_dir)) > 230:
+        raise render.RenderError(
+            "[E202] 保存先フォルダのパスが長すぎます。配信タイトルを短くするか、"
+            "保存先を浅いフォルダに変更してください。")
+
+    # E501: 書き込み可否
+    probe = job_dir / ".ttc_write_test"
+    try:
+        probe.write_text("ok", encoding="utf-8")
+        probe.unlink()
+    except OSError as e:
+        raise render.RenderError(
+            "[E501] 保存先に書き込めませんでした。ウイルス対策ソフトの除外設定に保存フォルダを"
+            f"追加するか、別の保存先をお試しください（{e}）。") from e
+
+    # E502: 空き容量（最低 500MB）
+    try:
+        free = _shutil.disk_usage(job_dir).free
+        render.jlog(f"FREE_BYTES={free}")
+        if free < 500 * 1024 * 1024:
+            raise render.RenderError("[E502] 空き容量が不足しています。ディスクの空きを増やしてから再実行してください。")
+    except OSError:
+        pass
+    render.jlog("PREFLIGHT=PASS")
+
+
 def run_job(
     input_video: str | Path,
     out_root: str | Path = "output",
@@ -186,6 +243,10 @@ def run_job(
     job_id = job_id or uuid.uuid4().hex[:12]
     job_dir = Path(out_root).resolve() / job_id
     job_dir.mkdir(parents=True, exist_ok=True)
+
+    # 0) 診断ログ初期化 ＋ 事前チェック（環境起因の失敗を冒頭で確定させ、長い処理の無駄を防ぐ）
+    render.set_job_context(job_id, job_dir)
+    _preflight(job_dir, input_video)
 
     # 1) 文字起こし（単語タイムスタンプ）
     progress(3, "動画を解析中")
@@ -440,9 +501,12 @@ def run_job(
     if errors_by_id:
         msg = f"{len(errors_by_id)}本のクリップ作成に失敗しました"
         first_err = next(iter(errors_by_id.values()))
-        detail = str(first_err).strip().splitlines()[-1] if str(first_err).strip() else ""
+        lines = [ln for ln in str(first_err).strip().splitlines() if ln.strip()]
+        # エラーコード行 [Exxx] を優先表示（無ければ末尾行）。debug.log に全文あり。
+        detail = next((ln for ln in lines if ln.strip().startswith("[E")), lines[-1] if lines else "")
         if detail:
             msg += f"（{detail}）"
+        render.jlog(f"[result] {msg}")
         result.warning = (result.warning + " " + msg) if result.warning else msg
     if errors_by_id and not results_by_id:
         raise RuntimeError(result.warning or "すべてのクリップ作成に失敗しました")

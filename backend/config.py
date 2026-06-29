@@ -306,7 +306,7 @@ class Settings:
     kotoba_timing_donor: str = field(default_factory=lambda: _env("KOTOBA_TIMING_DONOR", "small"))
 
     # クリップ条件（TikTok の最適尺）
-    clip_min_sec: float = 12.0
+    clip_min_sec: float = 18.0
     clip_max_sec: float = 60.0
     default_clip_count: int = 5
 

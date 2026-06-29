@@ -5,10 +5,15 @@ ffmpeg を cwd=出力先 で起動して basename 参照する。
 """
 from __future__ import annotations
 
+import contextlib
 import functools
+import locale
 import os
 import re
+import shutil
 import subprocess
+import sys
+import tempfile
 import threading
 from pathlib import Path
 
@@ -17,6 +22,137 @@ from ..config import FFMPEG, FONTS_DIR, OUTPUT_H, OUTPUT_W, SETTINGS
 
 class RenderError(RuntimeError):
     pass
+
+
+# ===== 診断ログ & ANSI 安全パス =====
+# ffmpeg(Windows) は ANSI コードページでファイルを開く。出力先/入力のパスに
+# 日本語ユーザー名・絵文字など非ANSI文字が含まれると、ffmpeg は相対パスを
+# GetCurrentDirectoryA で解決する際に失敗し「Error opening output files:
+# Invalid argument」になる（Pythonは Unicode API なのでフォルダ作成自体は成功）。
+# 対策: 非ANSIパス時は ASCII の一時フォルダで描画し、完成物を os.replace で移動する。
+# 並列描画(ThreadPoolExecutor)の worker からも参照できるようモジュールグローバルで保持
+# （contextvar はプール worker に伝播しない）。デスクトップ用途で同時実行は1ジョブ想定。
+_JOB_DIR: Path | None = None
+
+
+def set_job_context(job_id: str, job_dir) -> None:
+    """以後の ffmpeg 診断ログを job_dir/debug.log（と backend.log）へ出す。"""
+    global _JOB_DIR
+    _JOB_DIR = Path(job_dir)
+
+
+def _backend_log_path() -> Path | None:
+    base = os.environ.get("LOCALAPPDATA")
+    return (Path(base) / "TikTok-Cut" / "backend.log") if base else None
+
+
+def jlog(msg: str) -> None:
+    """診断ログを job_dir/debug.log と %LOCALAPPDATA%/TikTok-Cut/backend.log へ追記（Unicode安全）。"""
+    line = msg if msg.endswith("\n") else msg + "\n"
+    targets: list[Path] = []
+    if _JOB_DIR is not None:
+        targets.append(_JOB_DIR / "debug.log")
+    bl = _backend_log_path()
+    if bl:
+        targets.append(bl)
+    for p in targets:
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            with open(p, "a", encoding="utf-8") as f:
+                f.write(line)
+                f.flush()
+        except OSError:
+            pass
+    # コンソール出力はベストエフォート。cp932 コンソールに絵文字等を print すると
+    # UnicodeEncodeError で描画ごと巻き添えにするため、必ず握り潰す（ログ本体は上の utf-8 ファイル）。
+    try:
+        print(msg.rstrip("\n"), flush=True)
+    except Exception:
+        try:
+            enc = (getattr(sys.stdout, "encoding", None) or "utf-8")
+            sys.stdout.buffer.write((msg.rstrip("\n") + "\n").encode(enc, "replace"))
+            sys.stdout.flush()
+        except Exception:
+            pass
+
+
+def ansi_safe(p) -> bool:
+    """パスがプロセスのANSIコードページ（日本語Windowsは cp932）で表現可能か。"""
+    try:
+        enc = locale.getpreferredencoding(False) or "utf-8"
+        str(p).encode(enc)
+        return True
+    except (UnicodeEncodeError, LookupError):
+        return False
+
+
+def _ascii_base() -> str:
+    """ASCII 保証の一時フォルダ親。%TEMP% が非ANSIなら C:\\TikTokCutTmp。"""
+    base = tempfile.gettempdir()
+    if not ansi_safe(base):
+        base = os.path.join(os.environ.get("SystemDrive", "C:") + os.sep, "TikTokCutTmp")
+    os.makedirs(base, exist_ok=True)
+    return base
+
+
+def ensure_ascii_input(path) -> tuple[Path, "callable | None"]:
+    """非ANSIな入力パスを ASCII 一時パスへ複製して返す（probe/ffmpeg 共通で安全に）。
+
+    返り値 (safe_path, cleanup)。cleanup は不要時 None。同一ボリュームはハードリンクで即時。
+    """
+    p = Path(path)
+    if ansi_safe(p):
+        return p, None
+    d = Path(tempfile.mkdtemp(prefix="ttcin_", dir=_ascii_base()))
+    local = d / ("src" + p.suffix)
+    try:
+        os.link(p, local)            # 同一ボリュームなら即時・ゼロコピー
+    except OSError:
+        shutil.copy2(p, local)       # 別ボリュームはコピー
+    jlog(f"[input] 非ANSI入力を ASCII へ複製: {p} -> {local}")
+
+    def _cleanup() -> None:
+        with contextlib.suppress(OSError):
+            shutil.rmtree(d, ignore_errors=True)
+
+    return local, _cleanup
+
+
+@contextlib.contextmanager
+def _ascii_workspace(out_path: Path, inputs):
+    """ffmpeg を ASCII 安全な作業ディレクトリで動かす文脈。
+
+    出力先 out_path.parent が ANSI 安全ならそのまま（コピー無し＝従来通り）。危険なら
+    一時 ASCII フォルダで描画し、完成物を replace_retry（Unicode対応）で最終地点へ移動。
+    yields (work_dir: Path, out_name: str, input_args: dict[Path, str])。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    inputs = [Path(p) for p in (inputs or [])]
+    safe = ansi_safe(out_path.parent) and all(ansi_safe(p) for p in inputs)
+    if safe:
+        yield out_path.parent, out_path.name, {p: str(p.resolve()) for p in inputs}
+        return
+    work = Path(tempfile.mkdtemp(prefix="ttc_", dir=_ascii_base()))
+    try:
+        jlog(f"[workspace] 非ANSI出力先を検出 → ASCII一時フォルダで描画: {out_path.parent} -> {work}")
+        input_args: dict[Path, str] = {}
+        for idx, p in enumerate(inputs):
+            if ansi_safe(p):
+                input_args[p] = str(p.resolve())
+            else:
+                local = work / f"in{idx}{p.suffix}"
+                try:
+                    os.link(p, local)
+                except OSError:
+                    shutil.copy2(p, local)
+                input_args[p] = local.name
+        out_name = "out" + out_path.suffix
+        yield work, out_name, input_args
+        replace_retry(work / out_name, out_path)
+    finally:
+        with contextlib.suppress(OSError):
+            shutil.rmtree(work, ignore_errors=True)
 
 
 def check_ffmpeg(ffmpeg: str | None = None) -> None:
@@ -58,7 +194,21 @@ def replace_retry(src, dst, tries: int = 12, delay: float = 0.3) -> None:
     raise last if last else OSError(f"replace failed: {src} -> {dst}")
 
 
-def _run(args: list[str], cwd: Path | None = None) -> None:
+def _classify_ffmpeg_error(stderr: str) -> str:
+    """ffmpeg の stderr 末尾からエラーコードを推定（debug.log と UI 用）。"""
+    s = (stderr or "").lower()
+    if "invalid argument" in s and ("opening output" in s or "could not open" in s):
+        return "E401"   # 出力を開けない（多くはパス文字コード／権限）
+    if "no space left" in s:
+        return "E502"
+    if "permission denied" in s:
+        return "E501"
+    if any(k in s for k in ("nvenc", "cannot load nvcuda", "no capable devices")):
+        return "E402"
+    return "E400"
+
+
+def _run(args: list[str], cwd: Path | None = None, *, label: str = "") -> None:
     proc = subprocess.run(
         args,
         cwd=str(cwd) if cwd else None,
@@ -68,11 +218,13 @@ def _run(args: list[str], cwd: Path | None = None) -> None:
         encoding="utf-8",
         errors="replace",
     )
+    tail = "\n".join((proc.stderr or "").strip().splitlines()[-20:])
+    jlog(f"---- ffmpeg {label} cwd={cwd} exit={proc.returncode} ----")
+    jlog("CMD=" + " ".join(args))
     if proc.returncode != 0:
-        tail = "\n".join((proc.stderr or "").strip().splitlines()[-12:])
-        cmd_str = " ".join(args[:6]) + " ..." if len(args) > 6 else " ".join(args)
-        print(f"[render] ffmpeg failed: {cmd_str}\n  cwd={cwd}\n  stderr(tail)={tail}", flush=True)
-        raise RenderError(f"ffmpeg 失敗 (code {proc.returncode}):\n{tail}")
+        code = _classify_ffmpeg_error(proc.stderr or "")
+        jlog("STDERR_TAIL=\n" + tail)
+        raise RenderError(f"[{code}] ffmpeg 失敗 (code {proc.returncode}):\n{tail}")
 
 
 # ===== ハードウェアエンコード(NVENC)判定とコーデック引数の一元化 =====
@@ -110,18 +262,20 @@ _NVENC_DISABLED = False
 _nvenc_lock = threading.Lock()
 
 
-def _run_with_nvenc_fallback(build, *, cwd: Path | None = None, ffmpeg: str = FFMPEG) -> None:
+def _run_with_nvenc_fallback(build, *, cwd: Path | None = None, ffmpeg: str = FFMPEG,
+                             label: str = "") -> None:
     """build(use_nvenc)->args を実行。NVENC 失敗時は libx264 で1回リトライ。
 
     恒久的な NVENC 不可（ドライバ/デバイス無し）はモジュール全体で以後無効化し、
     クリップ毎の無駄な再試行を避ける（並列描画でも安全なよう Lock 保護）。
+    両方の試行を debug.log に記録する（GPU/CPU 双方失敗時の原因特定のため）。
     """
     global _NVENC_DISABLED
     if _NVENC_DISABLED or not _nvenc_available(ffmpeg):
-        _run(build(False), cwd=cwd)
+        _run(build(False), cwd=cwd, label=f"{label} codec=libx264")
         return
     try:
-        _run(build(True), cwd=cwd)
+        _run(build(True), cwd=cwd, label=f"{label} codec=nvenc attempt=1")
     except RenderError as e:
         msg = str(e).lower()
         if any(s in msg for s in ("cannot load nvcuda", "no nvenc capable",
@@ -129,8 +283,8 @@ def _run_with_nvenc_fallback(build, *, cwd: Path | None = None, ffmpeg: str = FF
                                   "driver", "gpu", "device")):
             with _nvenc_lock:
                 _NVENC_DISABLED = True
-        print(f"[render] NVENC 失敗、libx264 で再試行: {type(e).__name__}", flush=True)
-        _run(build(False), cwd=cwd)
+        jlog(f"[render] NVENC 失敗、libx264 で再試行 ({label}): {str(e).splitlines()[-1] if str(e).strip() else type(e).__name__}")
+        _run(build(False), cwd=cwd, label=f"{label} codec=libx264 attempt=2")
 
 
 def _logo_overlay_chain(in_label: str, out_label: str, logo_idx: int,
@@ -282,63 +436,65 @@ def render_clip(
     fonts_dir: str | Path | None = FONTS_DIR,
     ffmpeg: str = FFMPEG,
 ) -> Path:
-    """1 クリップを描画して out_path に書き出す。logo 指定時は同一パスで合成（再エンコード削減）。"""
-    input_video = Path(input_video).resolve()
+    """1 クリップを描画して out_path に書き出す。logo 指定時は同一パスで合成（再エンコード削減）。
+
+    出力先や入力が非ANSIパス（日本語ユーザー名・絵文字タイトル等）でも失敗しないよう、
+    入力を ASCII 化（ensure_ascii_input）し、ASCII 作業フォルダ（_ascii_workspace）で描画する。
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     duration = max(0.1, end - start)
     mode = reframe_mode or SETTINGS.reframe_mode
-
-    # ASS を出力先に配置（filtergraph では basename で参照）
-    ass_name = out_path.stem + ".ass"
-    (out_path.parent / ass_name).write_text(ass_content, encoding="utf-8")
-
-    # 同梱フォントを libass に渡す。絶対パスのドライブ ":" は filtergraph と衝突するため
-    # cwd(出力先)からの相対パスにして ":" を回避する。
-    ass_opt = ass_name
-    if fonts_dir and Path(fonts_dir).exists():
-        try:
-            rel = os.path.relpath(Path(fonts_dir).resolve(), out_path.parent.resolve())
-            ass_opt = f"{ass_name}:fontsdir={rel.replace(chr(92), '/')}"
-        except ValueError:
-            fd = str(Path(fonts_dir)).replace("\\", "/").replace(":", "\\:")
-            ass_opt = f"{ass_name}:fontsdir={fd}"
-
-    # リフレーム → 字幕焼き込み → 冒頭トランジション（映像） → ロゴ（最前面）の順。
-    vf_parts = [_reframe_filter(mode, letterbox_color), f"ass={ass_opt}"]
-    intro_v = _intro_video_filter(intro, probe_fps(input_video)) if intro else ""
-    if intro_v:
-        vf_parts.append(intro_v)
-    vf_chain = ",".join(vf_parts)
-    intro_a = _audio_intro_filter(intro) if intro else ""
     use_logo = _logo_ok(logo)
+    logo_path = Path(logo["path"]).resolve() if use_logo else None
+    ass_name = out_path.stem + ".ass"
 
-    def build(use_nvenc: bool) -> list[str]:
-        # -ss は入力前（高速シーク）。-t は全入力の後＝出力オプションにする
-        # （ロゴ入力の前に置くと -t がロゴPNGの入力長指定と解釈され、出力尺が崩れる）。
-        args = [ffmpeg, "-y", "-ss", f"{start:.3f}", "-i", str(input_video)]
-        if use_logo:
-            # ロゴ有り: 第2入力(PNG)が要るため -vf でなく -filter_complex で 1 パス合成。
-            args += ["-i", str(Path(logo["path"]).resolve())]
-            fc = (f"[0:v]{vf_chain}[__v];"
-                  + _logo_overlay_chain("[__v]", "[vout]", 1, logo.get("position", "br"),
-                                        float(logo.get("scale", 0.16)), float(logo.get("opacity", 0.9))))
-            args += ["-filter_complex", fc, "-map", "[vout]", "-map", "0:a?"]
-        else:
-            args += ["-vf", vf_chain]
-        args += ["-t", f"{duration:.3f}"]   # 出力長の制限（全入力の後＝出力オプション）
-        if intro_a:
-            args += ["-af", intro_a]
-        args += _video_codec_args(use_nvenc=use_nvenc, ffmpeg=ffmpeg)
-        args += [
-            "-c:a", "aac", "-b:a", "128k",
-            "-avoid_negative_ts", "make_zero",
-            "-movflags", "+faststart",
-            out_path.name,
-        ]
-        return args
+    input_video, _in_cleanup = ensure_ascii_input(Path(input_video).resolve())
+    try:
+        inputs = [input_video] + ([logo_path] if use_logo else [])
+        with _ascii_workspace(out_path, inputs) as (work, out_name, in_args):
+            # ASS を作業フォルダに配置（filtergraph では basename 参照）
+            (work / ass_name).write_text(ass_content, encoding="utf-8")
+            ass_opt = _fontsdir_opt(ass_name, work, fonts_dir)
 
-    _run_with_nvenc_fallback(build, cwd=out_path.parent, ffmpeg=ffmpeg)
+            # リフレーム → 字幕焼き込み → 冒頭トランジション（映像） → ロゴ（最前面）の順。
+            vf_parts = [_reframe_filter(mode, letterbox_color), f"ass={ass_opt}"]
+            intro_v = _intro_video_filter(intro, probe_fps(input_video)) if intro else ""
+            if intro_v:
+                vf_parts.append(intro_v)
+            vf_chain = ",".join(vf_parts)
+            intro_a = _audio_intro_filter(intro) if intro else ""
+
+            def build(use_nvenc: bool) -> list[str]:
+                # -ss は入力前（高速シーク）。-t は全入力の後＝出力オプションにする
+                # （ロゴ入力の前に置くと -t がロゴPNGの入力長指定と解釈され、出力尺が崩れる）。
+                args = [ffmpeg, "-y", "-ss", f"{start:.3f}", "-i", in_args[input_video]]
+                if use_logo:
+                    # ロゴ有り: 第2入力(PNG)が要るため -vf でなく -filter_complex で 1 パス合成。
+                    args += ["-i", in_args[logo_path]]
+                    fc = (f"[0:v]{vf_chain}[__v];"
+                          + _logo_overlay_chain("[__v]", "[vout]", 1, logo.get("position", "br"),
+                                                float(logo.get("scale", 0.16)), float(logo.get("opacity", 0.9))))
+                    args += ["-filter_complex", fc, "-map", "[vout]", "-map", "0:a?"]
+                else:
+                    args += ["-vf", vf_chain]
+                args += ["-t", f"{duration:.3f}"]   # 出力長の制限（全入力の後＝出力オプション）
+                if intro_a:
+                    args += ["-af", intro_a]
+                args += _video_codec_args(use_nvenc=use_nvenc, ffmpeg=ffmpeg)
+                args += [
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-avoid_negative_ts", "make_zero",
+                    "-movflags", "+faststart",
+                    out_name,
+                ]
+                return args
+
+            _run_with_nvenc_fallback(build, cwd=work, ffmpeg=ffmpeg,
+                                     label=f"render_clip {out_path.name}")
+    finally:
+        if _in_cleanup:
+            _in_cleanup()
     return out_path
 
 
@@ -367,63 +523,95 @@ def render_clip_segments(
     fonts_dir: str | Path | None = FONTS_DIR,
     ffmpeg: str = FFMPEG,
 ) -> Path:
-    """残し区間 keeps（クリップ先頭基準）を trim→concat で詰めて 1 本に描画する。"""
-    input_video = Path(input_video).resolve()
+    """残し区間 keeps（クリップ先頭基準）を trim→concat で詰めて 1 本に描画する。
+
+    非ANSIパス対策（ensure_ascii_input/_ascii_workspace）に加え、
+    keeps の健全化（ゼロ長区間の除去・入力EOFを超えない様クランプ）も行う。
+    """
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
     mode = reframe_mode or SETTINGS.reframe_mode
-
-    ass_name = out_path.stem + ".ass"
-    (out_path.parent / ass_name).write_text(ass_content, encoding="utf-8")
-    ass_opt = _fontsdir_opt(ass_name, out_path.parent, fonts_dir)
-
-    read_dur = max(b for _, b in keeps) + 0.1
-    has_audio = _has_audio(input_video, ffmpeg)   # 音声無しソースでは concat/atrim が失敗するため分岐
-    parts, labels = [], []
-    for i, (a, b) in enumerate(keeps):
-        parts.append(f"[0:v]trim={a:.3f}:{b:.3f},setpts=PTS-STARTPTS[v{i}]")
-        if has_audio:
-            parts.append(f"[0:a]atrim={a:.3f}:{b:.3f},asetpts=PTS-STARTPTS[a{i}]")
-            labels.append(f"[v{i}][a{i}]")
-        else:
-            labels.append(f"[v{i}]")
-    intro_v = _intro_video_filter(intro, probe_fps(input_video)) if intro else ""
-    intro_a = _audio_intro_filter(intro) if intro else ""
     use_logo = _logo_ok(logo)
-    # ロゴ有り時は映像鎖を [vpre] で止め、ロゴ合成を続けて [vout] に出す。
-    vlast = "[vpre]" if use_logo else "[vout]"
-    vchain = f"[cv]{_reframe_filter(mode, letterbox_color)},ass={ass_opt}" + (f",{intro_v}" if intro_v else "") + vlast
-    if has_audio:
-        achain = (f"[ca]{intro_a}[aout]" if intro_a else None)
-        amap = "[aout]" if achain else "[ca]"
-        chains = [f"{''.join(labels)}concat=n={len(keeps)}:v=1:a=1[cv][ca]", vchain]
-    else:
-        achain = None
-        amap = None
-        chains = [f"{''.join(labels)}concat=n={len(keeps)}:v=1:a=0[cv]", vchain]
-    if use_logo:
-        chains.append(_logo_overlay_chain(
-            "[vpre]", "[vout]", 1, logo.get("position", "br"),
-            float(logo.get("scale", 0.16)), float(logo.get("opacity", 0.9))))
-    if achain:
-        chains.append(achain)
-    fc = ";".join(parts + chains)
+    logo_path = Path(logo["path"]).resolve() if use_logo else None
+    ass_name = out_path.stem + ".ass"
 
-    def build(use_nvenc: bool) -> list[str]:
-        args = [ffmpeg, "-y", "-ss", f"{clip_start:.3f}", "-t", f"{read_dur:.3f}",
-                "-i", str(input_video)]
-        if use_logo:
-            args += ["-i", str(Path(logo["path"]).resolve())]   # 入力 #1 = ロゴ
-        args += ["-filter_complex", fc, "-map", "[vout]"]
-        if amap:
-            args += ["-map", amap, "-c:a", "aac", "-b:a", "128k"]
-        else:
-            args += ["-an"]   # 音声無しソース
-        args += _video_codec_args(use_nvenc=use_nvenc, ffmpeg=ffmpeg)
-        args += ["-movflags", "+faststart", out_path.name]
-        return args
+    input_video, _in_cleanup = ensure_ascii_input(Path(input_video).resolve())
+    try:
+        # keeps 健全化: 入力EOFを超える区間をクランプし、ゼロ長(b-a<0.05)を除去（E302/E303 対策）。
+        total = probe_duration(input_video)
+        max_rel = (total - clip_start) if total > 0 else None
+        clean: list[tuple[float, float]] = []
+        for a, b in keeps:
+            a = max(0.0, float(a))
+            b = float(b)
+            if max_rel is not None:
+                b = min(b, max_rel)
+            if b - a >= 0.05:
+                clean.append((round(a, 3), round(b, 3)))
+        if not clean:
+            # 全区間が無効 → 区間先頭から全体を 1 本で（最後の保険）
+            fallback_end = max_rel if max_rel and max_rel > 0.1 else (max(b for _, b in keeps) if keeps else 0.0)
+            if fallback_end <= 0.1:
+                raise RenderError("[E302] クリップの区間計算に失敗しました（有効な区間がありません）。")
+            clean = [(0.0, round(fallback_end, 3))]
+            jlog(f"[render] keeps が全て無効 → 全体 1 本にフォールバック: {clean}")
+        keeps = clean
+        read_dur = max(b for _, b in keeps) + 0.1
 
-    _run_with_nvenc_fallback(build, cwd=out_path.parent, ffmpeg=ffmpeg)
+        has_audio = _has_audio(input_video, ffmpeg)   # 音声無しソースでは concat/atrim が失敗するため分岐
+        parts, labels = [], []
+        for i, (a, b) in enumerate(keeps):
+            parts.append(f"[0:v]trim={a:.3f}:{b:.3f},setpts=PTS-STARTPTS[v{i}]")
+            if has_audio:
+                parts.append(f"[0:a]atrim={a:.3f}:{b:.3f},asetpts=PTS-STARTPTS[a{i}]")
+                labels.append(f"[v{i}][a{i}]")
+            else:
+                labels.append(f"[v{i}]")
+        intro_v = _intro_video_filter(intro, probe_fps(input_video)) if intro else ""
+        intro_a = _audio_intro_filter(intro) if intro else ""
+        # ロゴ有り時は映像鎖を [vpre] で止め、ロゴ合成を続けて [vout] に出す。
+        vlast = "[vpre]" if use_logo else "[vout]"
+
+        inputs = [input_video] + ([logo_path] if use_logo else [])
+        with _ascii_workspace(out_path, inputs) as (work, out_name, in_args):
+            (work / ass_name).write_text(ass_content, encoding="utf-8")
+            ass_opt = _fontsdir_opt(ass_name, work, fonts_dir)
+            vchain = f"[cv]{_reframe_filter(mode, letterbox_color)},ass={ass_opt}" + (f",{intro_v}" if intro_v else "") + vlast
+            if has_audio:
+                achain = (f"[ca]{intro_a}[aout]" if intro_a else None)
+                amap = "[aout]" if achain else "[ca]"
+                chains = [f"{''.join(labels)}concat=n={len(keeps)}:v=1:a=1[cv][ca]", vchain]
+            else:
+                achain = None
+                amap = None
+                chains = [f"{''.join(labels)}concat=n={len(keeps)}:v=1:a=0[cv]", vchain]
+            if use_logo:
+                chains.append(_logo_overlay_chain(
+                    "[vpre]", "[vout]", 1, logo.get("position", "br"),
+                    float(logo.get("scale", 0.16)), float(logo.get("opacity", 0.9))))
+            if achain:
+                chains.append(achain)
+            fc = ";".join(parts + chains)
+
+            def build(use_nvenc: bool) -> list[str]:
+                args = [ffmpeg, "-y", "-ss", f"{clip_start:.3f}", "-t", f"{read_dur:.3f}",
+                        "-i", in_args[input_video]]
+                if use_logo:
+                    args += ["-i", in_args[logo_path]]   # 入力 #1 = ロゴ
+                args += ["-filter_complex", fc, "-map", "[vout]"]
+                if amap:
+                    args += ["-map", amap, "-c:a", "aac", "-b:a", "128k"]
+                else:
+                    args += ["-an"]   # 音声無しソース
+                args += _video_codec_args(use_nvenc=use_nvenc, ffmpeg=ffmpeg)
+                args += ["-movflags", "+faststart", out_name]
+                return args
+
+            _run_with_nvenc_fallback(build, cwd=work, ffmpeg=ffmpeg,
+                                     label=f"render_clip_segments {out_path.name}")
+    finally:
+        if _in_cleanup:
+            _in_cleanup()
     return out_path
 
 
@@ -485,18 +673,23 @@ def make_thumbnail(
     ffmpeg: str = FFMPEG,
 ) -> Path:
     """動画の指定割合位置から 1 フレームをサムネイルとして書き出す。"""
-    video_path = Path(video_path).resolve()
     out_path = Path(out_path)
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    args = [
-        ffmpeg, "-y",
-        "-ss", f"{max(0.0, at):.3f}",
-        "-i", str(video_path),
-        "-frames:v", "1",
-        "-q:v", "3",
-        out_path.name,
-    ]
-    _run(args, cwd=out_path.parent)
+    src, _cleanup = ensure_ascii_input(Path(video_path).resolve())   # 非ANSI入力も安全に
+    try:
+        with _ascii_workspace(out_path, [src]) as (work, out_name, in_args):
+            args = [
+                ffmpeg, "-y",
+                "-ss", f"{max(0.0, at):.3f}",
+                "-i", in_args[src],
+                "-frames:v", "1",
+                "-q:v", "3",
+                out_name,
+            ]
+            _run(args, cwd=work, label=f"make_thumbnail {out_path.name}")
+    finally:
+        if _cleanup:
+            _cleanup()
     return out_path
 
 

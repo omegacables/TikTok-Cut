@@ -97,8 +97,8 @@ def resolve(genre_ids: list[str] | None) -> list[Genre]:
     return [_BY_ID[i] for i in genre_ids if i in _BY_ID]
 
 
-# 10秒以下のクリップは作らない（ユーザー方針の絶対下限）
-HARD_MIN_SEC = 10.0
+# 18秒未満のクリップは作らない（ユーザー方針の絶対下限）
+HARD_MIN_SEC = 18.0
 
 
 def build_block(
