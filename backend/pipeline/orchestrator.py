@@ -127,14 +127,28 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
                 letterbox_color=lb_color, logo=logo_use,
             )
 
+    m["_render_mode"] = "full"
     try:
         _render(logo_arg)
-    except render.RenderError:
+    except render.RenderError as e_logo:
+        # ロゴ合成だけの失敗ならロゴ無しで本体を出す。それでも（または元から）失敗するなら互換モードへ。
+        recovered = False
         if logo_arg is not None:
             print("[render] ロゴ合成に失敗 → ロゴ無しで再描画（本体は出力）", flush=True)
-            _render(None)
-        else:
-            raise
+            try:
+                _render(None)
+                recovered = True
+            except render.RenderError as e2:
+                e_logo = e2
+        if not recovered:
+            # 最後の砦: 字幕・演出・ロゴ無しの最小構成（CPU固定）で確実に1本出す。
+            render.jlog(f"[render] フル描画失敗 → 互換モード(字幕・演出なし)で再試行: "
+                        f"{str(e_logo).splitlines()[0] if str(e_logo).strip() else ''}")
+            render.render_compat(
+                input_video, float(m["start"]), float(m["end"]) - float(m["start"]),
+                out_mp4, reframe_mode=m.get("reframe"), letterbox_color=lb_color,
+            )
+            m["_render_mode"] = "compat"
     # 効果音（タイムラインで配置・任意）を amix で焼き込む（base 音量は維持）。
     # ロゴ/キャラと違い、ユーザーが明示配置した「音」なので失敗は握り潰さず伝播させる
     # （update_clip が 500 を返し、UI 表示と書き出しの不一致＝サイレント失敗を防ぐ）。
@@ -464,10 +478,11 @@ def run_job(
 
     def _render_one(i, h, manifest):
         out_mp4, thumb = render_from_manifest(input_video, job_dir, manifest)
-        return i, h, out_mp4, thumb
+        return i, h, out_mp4, thumb, manifest.get("_render_mode", "full")
 
     results_by_id: dict[int, ClipResult] = {}
     errors_by_id: dict[int, Exception] = {}
+    compat_ids: list[int] = []
     done = 0
     prog_lock = threading.Lock()
     with ThreadPoolExecutor(max_workers=min(_max_render_workers(), max(1, n))) as ex:
@@ -478,7 +493,9 @@ def run_job(
                 done += 1
                 progress(65 + int(done / n * 33), f"クリップ {done}/{n} を作成中")
             try:
-                i, h, out_mp4, thumb = fut.result()
+                i, h, out_mp4, thumb, render_mode = fut.result()
+                if render_mode == "compat":
+                    compat_ids.append(i)
                 results_by_id[i] = ClipResult(
                     id=i,
                     title=h.title,
@@ -498,6 +515,10 @@ def run_job(
 
     for i in sorted(results_by_id):
         result.clips.append(results_by_id[i])
+    if compat_ids:
+        cmsg = f"{len(compat_ids)}本は互換モード（字幕・演出なし）で作成しました（通常描画が失敗したため）"
+        render.jlog(f"[result] {cmsg} ids={sorted(compat_ids)}")
+        result.warning = (result.warning + " " + cmsg) if result.warning else cmsg
     if errors_by_id:
         msg = f"{len(errors_by_id)}本のクリップ作成に失敗しました"
         first_err = next(iter(errors_by_id.values()))

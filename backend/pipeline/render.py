@@ -195,16 +195,25 @@ def replace_retry(src, dst, tries: int = 12, delay: float = 0.3) -> None:
 
 
 def _classify_ffmpeg_error(stderr: str) -> str:
-    """ffmpeg の stderr 末尾からエラーコードを推定（debug.log と UI 用）。"""
-    s = (stderr or "").lower()
-    if "invalid argument" in s and ("opening output" in s or "could not open" in s):
-        return "E401"   # 出力を開けない（多くはパス文字コード／権限）
+    """ffmpeg の stderr 末尾からエラーコードを推定（debug.log と UI 用）。
+
+    注意: 先頭のビルドバナー(configuration 行)には "nvenc" 等が必ず含まれ誤判定するため、
+    実エラーが出る末尾数行のみを見る。
+    """
+    lines = (stderr or "").strip().splitlines()
+    s = "\n".join(lines[-8:]).lower()
     if "no space left" in s:
         return "E502"
     if "permission denied" in s:
         return "E501"
-    if any(k in s for k in ("nvenc", "cannot load nvcuda", "no capable devices")):
-        return "E402"
+    if any(k in s for k in ("invalid data", "error opening input", "does not contain any stream",
+                            "could not find codec", "decoder")):
+        return "E301"   # 入力が壊れ/非対応
+    if any(k in s for k in ("cannot load nvcuda", "no capable devices", "openencodesessionex",
+                            "incompatible client key", "h264_nvenc", "nvenc")):
+        return "E402"   # GPU(NVENC)エンコード不可
+    if "invalid argument" in s and ("opening output" in s or "could not open" in s or "muxer" in s):
+        return "E401"   # 出力を開けない（パス文字コード／権限）
     return "E400"
 
 
@@ -218,13 +227,16 @@ def _run(args: list[str], cwd: Path | None = None, *, label: str = "") -> None:
         encoding="utf-8",
         errors="replace",
     )
-    tail = "\n".join((proc.stderr or "").strip().splitlines()[-20:])
+    stderr_lines = (proc.stderr or "").strip().splitlines()
+    tail = "\n".join(stderr_lines[-20:])
     jlog(f"---- ffmpeg {label} cwd={cwd} exit={proc.returncode} ----")
     jlog("CMD=" + " ".join(args))
     if proc.returncode != 0:
         code = _classify_ffmpeg_error(proc.stderr or "")
         jlog("STDERR_TAIL=\n" + tail)
-        raise RenderError(f"[{code}] ffmpeg 失敗 (code {proc.returncode}):\n{tail}")
+        # ffmpeg stderr の最終有効行を画面メッセージに載せる（ログを開けない人でも原因が見える）
+        reason = next((ln.strip() for ln in reversed(stderr_lines) if ln.strip()), "")
+        raise RenderError(f"[{code}] ffmpeg失敗(code {proc.returncode}): {reason}\n{tail}")
 
 
 # ===== ハードウェアエンコード(NVENC)判定とコーデック引数の一元化 =====
@@ -468,7 +480,7 @@ def render_clip(
             def build(use_nvenc: bool) -> list[str]:
                 # -ss は入力前（高速シーク）。-t は全入力の後＝出力オプションにする
                 # （ロゴ入力の前に置くと -t がロゴPNGの入力長指定と解釈され、出力尺が崩れる）。
-                args = [ffmpeg, "-y", "-ss", f"{start:.3f}", "-i", in_args[input_video]]
+                args = [ffmpeg, "-y", "-hide_banner", "-ss", f"{start:.3f}", "-i", in_args[input_video]]
                 if use_logo:
                     # ロゴ有り: 第2入力(PNG)が要るため -vf でなく -filter_complex で 1 パス合成。
                     args += ["-i", in_args[logo_path]]
@@ -594,7 +606,7 @@ def render_clip_segments(
             fc = ";".join(parts + chains)
 
             def build(use_nvenc: bool) -> list[str]:
-                args = [ffmpeg, "-y", "-ss", f"{clip_start:.3f}", "-t", f"{read_dur:.3f}",
+                args = [ffmpeg, "-y", "-hide_banner", "-ss", f"{clip_start:.3f}", "-t", f"{read_dur:.3f}",
                         "-i", in_args[input_video]]
                 if use_logo:
                     args += ["-i", in_args[logo_path]]   # 入力 #1 = ロゴ
@@ -609,6 +621,51 @@ def render_clip_segments(
 
             _run_with_nvenc_fallback(build, cwd=work, ffmpeg=ffmpeg,
                                      label=f"render_clip_segments {out_path.name}")
+    finally:
+        if _in_cleanup:
+            _in_cleanup()
+    return out_path
+
+
+def render_compat(
+    input_video: str | Path,
+    start: float,
+    duration: float,
+    out_path: str | Path,
+    *,
+    reframe_mode: str | None = None,
+    letterbox_color: str = "black",
+    ffmpeg: str = FFMPEG,
+) -> Path:
+    """互換モード（最後の砦）: 字幕・演出・ロゴ・トランジション無しの最小構成で確実に書き出す。
+
+    フル描画が失敗した時の保険。GPU(NVENC)は使わず libx264 固定（ドライバ非依存）、
+    入力ストリームは安全に選択、壊れたタイムスタンプも +genpts で補う。
+    縦型 9:16 への変換のみ行うため、デコードさえできれば大抵のソースで成功する。
+    """
+    out_path = Path(out_path)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    duration = max(0.1, float(duration))
+    mode = reframe_mode or SETTINGS.reframe_mode
+    input_video, _in_cleanup = ensure_ascii_input(Path(input_video).resolve())
+    try:
+        with _ascii_workspace(out_path, [input_video]) as (work, out_name, in_args):
+            vf = f"{_reframe_filter(mode, letterbox_color)},format=yuv420p"
+
+            def build(_use_nvenc: bool) -> list[str]:
+                return [
+                    ffmpeg, "-y", "-hide_banner", "-fflags", "+genpts",
+                    "-ss", f"{start:.3f}", "-i", in_args[input_video],
+                    "-map", "0:v:0?", "-map", "0:a:0?",
+                    "-vf", vf, "-t", f"{duration:.3f}",
+                    # 互換性最優先で CPU(libx264) 固定
+                    "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-pix_fmt", "yuv420p",
+                    "-c:a", "aac", "-b:a", "128k",
+                    "-avoid_negative_ts", "make_zero", "-movflags", "+faststart",
+                    out_name,
+                ]
+
+            _run(build(False), cwd=work, label=f"render_compat {out_path.name}")
     finally:
         if _in_cleanup:
             _in_cleanup()
@@ -679,7 +736,7 @@ def make_thumbnail(
     try:
         with _ascii_workspace(out_path, [src]) as (work, out_name, in_args):
             args = [
-                ffmpeg, "-y",
+                ffmpeg, "-y", "-hide_banner",
                 "-ss", f"{max(0.0, at):.3f}",
                 "-i", in_args[src],
                 "-frames:v", "1",
