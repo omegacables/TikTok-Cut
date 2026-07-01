@@ -154,7 +154,20 @@
 
   <!-- ===== 作成タブ ===== -->
   <main id="tab-create" class="panel active">
-    <div class="card">
+    <div class="mode-tabs" style="margin-bottom:14px;">
+      <button type="button" class="mode-tab active" data-pmode="new" onclick="switchPageMode('new')">新規作成</button>
+      <button type="button" class="mode-tab" data-pmode="reedit" onclick="switchPageMode('reedit')">再編集（過去の作品）</button>
+    </div>
+
+    <!-- 再編集: 過去に生成した作品を開いて、結果・詳細編集をそのまま使う -->
+    <div class="card" id="reeditCard" hidden>
+      <div class="field">
+        <label>過去の作品 <span class="opt">（クリックで開く→「結果」タブから字幕・カット・効果音を再編集できます）</span></label>
+        <div id="jobList" class="job-list"></div>
+      </div>
+    </div>
+
+    <div class="card" id="createCard">
       <div class="field">
         <label for="urlInput">YouTube アーカイブ URL <span class="opt">（任意・字幕精度向上用）</span></label>
         <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=...">

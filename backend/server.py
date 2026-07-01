@@ -402,13 +402,67 @@ def status(job_id: str):
     raise HTTPException(404, "ジョブが見つかりません")
 
 
+@app.get("/api/jobs")
+def list_jobs(limit: int = 100):
+    """再編集モード用: 過去に生成したジョブ（result.json のあるフォルダ）を新しい順に返す。
+
+    input_exists=False は元動画が移動/削除済み＝閲覧・DLは可能だが再生成は不可。
+    """
+    jobs: list[dict] = []
+    try:
+        for p in OUTPUT_ROOT.iterdir():
+            if not p.is_dir():
+                continue
+            rj = p / "result.json"
+            if not rj.exists():
+                continue
+            try:
+                data = json.loads(rj.read_text(encoding="utf-8"))
+            except (ValueError, OSError):
+                continue
+            clips = data.get("clips") or []
+            thumb = next((c.get("thumbnail_path", "") for c in clips
+                          if isinstance(c, dict) and c.get("thumbnail_path")), "")
+            src = str(data.get("input_video", "") or "")
+            try:
+                input_exists = bool(src) and Path(src).exists()
+            except OSError:
+                input_exists = False
+            jobs.append({
+                "job_id": p.name,
+                "mtime": rj.stat().st_mtime,
+                "clip_count": len(clips),
+                "thumbnail_path": thumb,
+                "duration": data.get("duration", 0.0),
+                "input_exists": input_exists,
+            })
+    except OSError:
+        pass
+    jobs.sort(key=lambda j: j["mtime"], reverse=True)
+    return {"jobs": jobs[:max(1, min(500, int(limit)))]}
+
+
+def _load_manifest(mf: Path, required: tuple[str, ...] = ()) -> dict:
+    """clip_NN.json を読み、壊れている/必須キー欠落なら 400 を返す（KeyError→500 を防ぐ）。"""
+    try:
+        m = json.loads(mf.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as e:
+        raise HTTPException(400, f"クリップ情報が壊れています: {e}") from e
+    if not isinstance(m, dict):
+        raise HTTPException(400, "クリップ情報が壊れています（形式不正）")
+    missing = [k for k in required if k not in m]
+    if missing:
+        raise HTTPException(400, f"クリップ情報が壊れています（{'/'.join(missing)} がありません）")
+    return m
+
+
 @app.get("/api/clip/{job}/{cid}")
 def get_clip(job: str, cid: int):
     """手動修正UI用: クリップの編集データ（タイトル/テロップ）を返す。"""
     mf = _output_path(job, f"clip_{cid:02d}.json")
     if not mf.exists():
         raise HTTPException(404, "クリップ情報が見つかりません")
-    m = json.loads(mf.read_text(encoding="utf-8"))
+    m = _load_manifest(mf, required=("id",))
     return {"id": m["id"], "title": m.get("title", ""), "hook": m.get("hook", ""),
             "telops": m.get("telops", []), "style": m.get("style", {}),
             "telops_orig": m.get("telops_orig", []),   # 「初期設定に戻す」用の原字幕
@@ -431,7 +485,10 @@ def clip_waveform(job: str, cid: int, n: int = 400):
     if not mp4.exists():
         raise HTTPException(404, "クリップが見つかりません")
     n = max(50, min(2000, int(n)))
-    mtime = mp4.stat().st_mtime
+    try:
+        mtime = mp4.stat().st_mtime   # exists() 直後の削除/再描画中でも 500 にしない
+    except OSError:
+        raise HTTPException(404, "クリップが見つかりません")
     cache = _output_path(job, f"clip_{cid:02d}.peaks.json")
     if cache.exists():
         try:
@@ -462,7 +519,7 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
     mf = _output_path(job, f"clip_{cid:02d}.json")
     if not mf.exists():
         raise HTTPException(404, "クリップ情報が見つかりません")
-    m = json.loads(mf.read_text(encoding="utf-8"))
+    m = _load_manifest(mf, required=("id", "input_video", "start", "end", "clip_duration", "telops"))
     if "title" in payload:
         m["title"] = str(payload["title"])
     if "hook" in payload:
@@ -572,6 +629,11 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
         if nt:
             m["title"] = nt
 
+    # 再編集で元動画が移動/削除されていると全ティアが失敗するため、先に分かりやすく弾く
+    _src = str(m.get("input_video", "") or "")
+    if not _src or not Path(_src).exists():
+        raise HTTPException(400, "元動画が見つかりません（移動または削除された可能性）。"
+                                 "再生成には作成時の動画ファイルが必要です")
     mf.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
     try:
         render_from_manifest(m["input_video"], _job_dir(job), m)

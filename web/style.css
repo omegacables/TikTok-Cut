@@ -525,3 +525,14 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .modal-box { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; padding: 24px; width: min(92vw, 440px); max-height: 88vh; overflow-y: auto; }
 .modal-box h3 { margin: 0 0 16px; }
 .modal-box input[type=password] { width: 100%; padding: 12px 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 9px; color: var(--text); font-size: .95rem; }
+
+/* ===== 再編集モード: 過去の作品一覧 ===== */
+.job-list { display: flex; flex-direction: column; gap: 10px; max-height: 62vh; overflow-y: auto; }
+.job-item { display: flex; align-items: center; gap: 14px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; padding: 10px 14px; transition: border-color .15s; }
+.job-item:hover { border-color: var(--accent); }
+.job-item img, .job-noimg { width: 52px; height: 92px; object-fit: cover; border-radius: 7px; background: #000; flex-shrink: 0; }
+.job-noimg { display: flex; align-items: center; justify-content: center; font-size: 1.4rem; color: var(--muted); }
+.job-info { flex: 1; min-width: 0; }
+.job-name { font-weight: 600; font-size: .95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.job-meta { color: var(--muted); font-size: .8rem; margin-top: 3px; }
+.job-item .dl-btn { flex-shrink: 0; width: auto; padding: 8px 18px; }

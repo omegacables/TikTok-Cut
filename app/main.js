@@ -223,7 +223,9 @@ function killBackend() {
   if (backendProc && !backendProc.killed) {
     try {
       if (process.platform === 'win32') {
-        spawn('taskkill', ['/pid', String(backendProc.pid), '/f', '/t'], { windowsHide: true });
+        // taskkill 自体の失敗（PID消滅等）でプロセスが 'error' を投げても親を巻き込まない
+        const tk = spawn('taskkill', ['/pid', String(backendProc.pid), '/f', '/t'], { windowsHide: true });
+        tk.on('error', () => {});
       } else {
         backendProc.kill('SIGTERM');
       }
@@ -232,9 +234,15 @@ function killBackend() {
   }
 }
 
+// ウィンドウが閉じた後に飛んでくる IPC でダイアログを開いてクラッシュしないためのガード
+function _win() {
+  return (mainWindow && !mainWindow.isDestroyed()) ? mainWindow : null;
+}
+
 // ---- IPC: ネイティブファイル選択 ----
 ipcMain.handle('select-video', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, {
+  const w = _win(); if (!w) return null;
+  const res = await dialog.showOpenDialog(w, {
     title: '配信アーカイブ動画を選択',
     properties: ['openFile'],
     filters: [{ name: '動画', extensions: ['mp4', 'mov', 'mkv', 'webm', 'avi'] }],
@@ -244,11 +252,12 @@ ipcMain.handle('select-video', async () => {
 
 // ---- IPC: 生成クリップの保存 ----
 ipcMain.handle('save-file', async (_e, serverPath, saveName) => {
+  const w = _win(); if (!w) return { cancelled: true };
   const root = path.resolve(OUTPUT_ROOT);
   const abs = path.resolve(root, String(serverPath || ''));
   if (abs !== root && !abs.startsWith(root + path.sep)) return { error: '不正なパスです' };
   if (!fs.existsSync(abs)) return { error: 'ファイルが見つかりません' };
-  const res = await dialog.showSaveDialog(mainWindow, {
+  const res = await dialog.showSaveDialog(w, {
     defaultPath: saveName || path.basename(abs),
     filters: [{ name: 'MP4 動画', extensions: ['mp4'] }],
   });
@@ -259,7 +268,8 @@ ipcMain.handle('save-file', async (_e, serverPath, saveName) => {
 
 // ---- IPC: 保存先フォルダ選択 ----
 ipcMain.handle('select-folder', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, {
+  const w = _win(); if (!w) return null;
+  const res = await dialog.showOpenDialog(w, {
     title: '保存先フォルダを選択', properties: ['openDirectory', 'createDirectory'],
   });
   return res.canceled || !res.filePaths.length ? null : res.filePaths[0];
@@ -267,7 +277,8 @@ ipcMain.handle('select-folder', async () => {
 
 // ---- IPC: ロゴ画像選択 ----
 ipcMain.handle('select-logo', async () => {
-  const res = await dialog.showOpenDialog(mainWindow, {
+  const w = _win(); if (!w) return null;
+  const res = await dialog.showOpenDialog(w, {
     title: 'ロゴ画像を選択（透過PNG推奨）', properties: ['openFile'],
     filters: [{ name: '画像', extensions: ['png', 'jpg', 'jpeg', 'webp'] }],
   });

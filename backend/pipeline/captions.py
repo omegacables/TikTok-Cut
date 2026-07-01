@@ -50,10 +50,15 @@ def _dialogue(start: float, end: float, style: str, lines: list[str], override: 
 
 
 def _display_telops(telops: list[dict], clip_duration: float) -> list[dict]:
-    """焼き込み時だけ字幕の表示時間を少し延ばす。
+    """焼き込み時の表示時間を「発話中だけ」に揃える。
 
-    Whisper の単語時刻どおりだと短い発話が一瞬で消え、動画上では「字幕が少ない」
-    ように見える。編集データの時刻は変えず、ASS 出力時だけ自然な範囲で延長する。
+    方針: 字幕は喋り始めに出て、喋り終わりで消える（音声と字幕の体感ズレを排除）。
+    - 発話終了後の余韻は +0.25s だけ（読み残しの瞬き防止）。上限は +0.8s。
+    - 一瞬の発話も読めるよう最低 0.9s は表示（ただし次の発話開始は侵さない）。
+    - 無音の橋渡しはしない（旧実装は次の発話まで最長2.8sを繋いでいた＝
+      「喋っていないのに字幕が出る」の原因）。0.35s 以下の切れ目だけ、
+      連続する発話のちらつき防止として繋ぐ。
+    編集データの時刻は変えず、ASS 出力時だけ調整する。
     """
     ordered = sorted((dict(tp) for tp in telops), key=lambda tp: float(tp.get("start", 0)))
     out: list[dict] = []
@@ -69,10 +74,10 @@ def _display_telops(telops: list[dict], clip_duration: float) -> list[dict]:
                 next_s = max(s, min(clip_duration, float(ordered[i + 1].get("start", clip_duration))))
             except (TypeError, ValueError):
                 next_s = clip_duration
-        min_end = s + 1.35
-        max_end = e + 2.6
-        target = max(e, min_end)
-        if next_s - e <= 2.8:
+        min_end = s + 0.9          # 読める最低表示（次の発話開始は侵さない）
+        max_end = e + 0.8          # 発話終了からの残留はここまで
+        target = max(e + 0.25, min_end)
+        if 0 < next_s - e <= 0.35:  # 連続発話の小さな切れ目だけ繋ぐ（ちらつき防止）
             target = max(target, next_s - 0.05)
         tp["start"] = round(s, 3)
         tp["end"] = round(max(s + 0.2, min(clip_duration, next_s - 0.05, max_end, target)), 3)
@@ -793,7 +798,11 @@ def build_ass(
     if hook.strip():
         emit(0.0, min(2.2, clip_duration), "Hook", _wrap_static(hook, _max_chars(hook_size), 2),
              _anim_group(animation, "hook", animate), "#FFE600", hook_size)
-    sub_off = 0.0
+    # 字幕タイミング微調整（編集UIの sub_offset・±2s）。負=早める/正=遅らせる。
+    try:
+        sub_off = max(-2.0, min(2.0, float(sub_offset))) if sub_offset is not None else 0.0
+    except (TypeError, ValueError):
+        sub_off = 0.0
     for tp in telops:
         text = str(tp.get("text", "")).strip()
         if not text:

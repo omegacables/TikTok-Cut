@@ -196,8 +196,8 @@ def keep_segments(mode: str, *, clip_start: float, dur: float, words: list[Word]
     if mode in ("silence", "both") and loud_times:
         sil = _silence_keeps(loud_times, loud_db or [], clip_start, dur)
         keeps = _intersect(keeps, sil)
-    # 全モード共通の最終ガード: 切りすぎ（10秒未満 or 元尺の半分未満）なら切らない
-    if is_trim(keeps, dur) and total_kept(keeps) < max(_MIN_KEEP_SEC, dur * 0.5):
+    # 全モード共通の最終ガード: 切りすぎ（最小秒数 or 元尺の _MIN_KEEP_RATIO 未満）なら切らない
+    if is_trim(keeps, dur) and total_kept(keeps) < max(_MIN_KEEP_SEC, dur * _MIN_KEEP_RATIO):
         return _full(dur)
     return keeps
 

@@ -96,6 +96,82 @@ function switchTab(tab) {
   document.getElementById('tab-' + tab).classList.add('active');
 }
 
+// ===== 再編集モード（作成ページの分岐）: 過去の作品を開いて結果/詳細編集をそのまま使う =====
+function switchPageMode(m) {
+  document.querySelectorAll('[data-pmode]').forEach(b => b.classList.toggle('active', b.dataset.pmode === m));
+  document.getElementById('createCard').hidden = (m !== 'new');
+  document.getElementById('reeditCard').hidden = (m !== 'reedit');
+  if (m === 'reedit') loadJobs();
+}
+
+async function loadJobs() {
+  const box = document.getElementById('jobList');
+  box.innerHTML = '<div class="ed-loading">読み込み中...</div>';
+  try {
+    const data = await (await fetch('/api/jobs')).json();
+    const jobs = data.jobs || [];
+    if (!jobs.length) {
+      box.innerHTML = '<div class="ed-loading">過去の作品はまだありません（動画を作成するとここに並びます）</div>';
+      return;
+    }
+    box.innerHTML = '';
+    jobs.forEach(j => {
+      const d = new Date((j.mtime || 0) * 1000);
+      const date = d.getFullYear() + '/' + (d.getMonth() + 1) + '/' + d.getDate()
+        + ' ' + d.getHours() + ':' + String(d.getMinutes()).padStart(2, '0');
+      const item = document.createElement('div');
+      item.className = 'job-item';
+      if (j.thumbnail_path) {
+        const img = document.createElement('img');
+        img.src = apiUrl('/api/download/' + encodeURI(j.thumbnail_path));
+        img.alt = '';
+        item.appendChild(img);
+      } else {
+        const ph = document.createElement('div');
+        ph.className = 'job-noimg';
+        ph.textContent = '🎬';
+        item.appendChild(ph);
+      }
+      const info = document.createElement('div');
+      info.className = 'job-info';
+      const name = document.createElement('div');
+      name.className = 'job-name';
+      name.textContent = j.job_id;
+      const meta = document.createElement('div');
+      meta.className = 'job-meta';
+      meta.textContent = date + '・クリップ ' + (j.clip_count || 0) + '本'
+        + (j.input_exists ? '' : '・元動画なし（閲覧/DLのみ・再生成不可）');
+      info.appendChild(name); info.appendChild(meta);
+      item.appendChild(info);
+      const btn = document.createElement('button');
+      btn.className = 'dl-btn';
+      btn.textContent = '開く';
+      btn.onclick = () => openJob(j.job_id);
+      item.appendChild(btn);
+      box.appendChild(item);
+    });
+  } catch (_) {
+    box.innerHTML = '<div class="ed-loading">読み込みに失敗しました</div>';
+  }
+}
+
+async function openJob(jobId) {
+  try {
+    const resp = await fetch('/api/status/' + encodeURIComponent(jobId));
+    const job = await resp.json();
+    if (!resp.ok) throw new Error(job.detail || '読み込みに失敗しました');
+    currentJobId = jobId;
+    renderClips(job.clips || []);
+    const badge = document.getElementById('clipBadge');
+    badge.textContent = (job.clips || []).length;
+    badge.hidden = false;
+    document.getElementById('resultTabBtn').disabled = false;
+    switchTab('result');
+  } catch (e) {
+    alert('エラー: ' + e.message);
+  }
+}
+
 async function selectVideo() {
   if (electron && electron.selectVideo) {
     const path = await electron.selectVideo();
@@ -1301,9 +1377,12 @@ function toggleEditor(btn) {
 
 async function loadEditor(ed) {
   const job = ed.dataset.job, cid = ed.dataset.cid;
+  // 素早くクリップを切り替えた際、先発の遅い fetch が後発の状態を上書きしないよう世代番号で防ぐ
+  const gen = (ed._loadGen = (ed._loadGen || 0) + 1);
   ed.innerHTML = '<div class="ed-loading">読み込み中...</div>';
   try {
     const data = await (await fetch('/api/clip/' + job + '/' + cid)).json();
+    if (ed._loadGen !== gen) return;   // 別クリップの読込が始まっていたら破棄
     ed._dur = +data.clip_duration || 0;
     const _mkTelop = t => ({
       start: +t.start || 0, end: +t.end || 0, text: t.text || '',
@@ -1436,6 +1515,7 @@ async function loadEditor(ed) {
       }
     }
   } catch (e) {
+    if (ed._loadGen !== gen) return;   // 後発の読込に切り替わっていたら何もしない
     ed.innerHTML = '<div class="ed-loading">読み込みに失敗しました</div>';
   }
 }
