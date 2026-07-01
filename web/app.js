@@ -1241,7 +1241,7 @@ async function saveDetail(btn) {
     document.getElementById('detailTitle').textContent = cid + '. ' + (newTitle || '無題');
     const gc = _bustGridCard(job, cid);
     if (gc) gc.querySelector('.clip-title').textContent = cid + '. ' + (newTitle || '無題');
-    st.textContent = '✓ 保存しました';
+    st.textContent = data.warning ? ('✓ 保存（' + data.warning + '）') : '✓ 保存しました';
     if (reload) { ed.dataset.loaded = ''; loadEditor(ed); }   // 延長/追加指示でテロップが変わる
   } catch (e) {
     _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰（ディスクは未変更）
@@ -1945,7 +1945,7 @@ async function saveClip(btn) {
       const gc = _bustGridCard(job, cid);
       if (gc) gc.querySelector('.clip-title').textContent = cid + '. ' + (newTitle || '無題');
     }
-    st.textContent = '✓ 更新しました';
+    st.textContent = data.warning ? ('✓ 更新（' + data.warning + '）') : '✓ 更新しました';
     if (reload) { ed.dataset.loaded = ''; loadEditor(ed); }
   } catch (e) {
     _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰

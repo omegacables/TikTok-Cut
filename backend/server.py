@@ -577,9 +577,14 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
         render_from_manifest(m["input_video"], _job_dir(job), m)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(500, f"再作成に失敗しました: {e}")
+    # フォールバック描画（字幕維持/互換）が使われた場合は編集UIに通知（サイレント失敗を防ぐ）
+    mode = m.get("_render_mode", "full")
+    warn = {"subs": "演出/ロゴなしの簡易モードで作成しました（字幕は入っています）",
+            "compat": "字幕・演出なしの互換モードで作成しました"}.get(mode, "")
     return {"ok": True, "file_path": f"{job}/clip_{cid:02d}.mp4",
             "title": m.get("title", ""), "telops": m.get("telops", []),
-            "start": m.get("start"), "end": m.get("end")}
+            "start": m.get("start"), "end": m.get("end"),
+            "render_mode": mode, "warning": warn}
 
 
 # 一括適用できる字幕スタイルのキー（位置は per-clip レイアウトなので除外）

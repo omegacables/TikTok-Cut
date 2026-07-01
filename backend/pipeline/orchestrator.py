@@ -113,37 +113,50 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
     logo = m.get("logo") or {}
     logo_arg = logo if logo.get("path") else None
 
-    def _render(logo_use):
+    def _render(logo_use, *, intro_use=intro, force_cpu=False):
         if keeps:
             render.render_clip_segments(
                 input_video, float(m["start"]), [tuple(k) for k in keeps], ass,
-                out_mp4, reframe_mode=m.get("reframe"), intro=intro,
-                letterbox_color=lb_color, logo=logo_use,
+                out_mp4, reframe_mode=m.get("reframe"), intro=intro_use,
+                letterbox_color=lb_color, logo=logo_use, force_cpu=force_cpu,
             )
         else:
             render.render_clip(
                 input_video, float(m["start"]), float(m["end"]), ass,
-                out_mp4, reframe_mode=m.get("reframe"), intro=intro,
-                letterbox_color=lb_color, logo=logo_use,
+                out_mp4, reframe_mode=m.get("reframe"), intro=intro_use,
+                letterbox_color=lb_color, logo=logo_use, force_cpu=force_cpu,
             )
 
+    def _first_line(err):
+        s = str(err).strip()
+        return s.splitlines()[0] if s else ""
+
+    # 段階的フォールバック: ① フル → ② ロゴ無し → ③ 字幕維持(CPU・演出/ロゴ無し) → ④ 互換(字幕無し)
     m["_render_mode"] = "full"
     try:
-        _render(logo_arg)
-    except render.RenderError as e_logo:
-        # ロゴ合成だけの失敗ならロゴ無しで本体を出す。それでも（または元から）失敗するなら互換モードへ。
+        _render(logo_arg)                                   # ① フル
+    except render.RenderError as e1:
         recovered = False
         if logo_arg is not None:
-            print("[render] ロゴ合成に失敗 → ロゴ無しで再描画（本体は出力）", flush=True)
+            print("[render] ロゴ合成に失敗 → ロゴ無しで再描画", flush=True)
             try:
-                _render(None)
+                _render(None)                               # ② ロゴ無し（字幕・演出は維持）
                 recovered = True
             except render.RenderError as e2:
-                e_logo = e2
+                e1 = e2
         if not recovered:
-            # 最後の砦: 字幕・演出・ロゴ無しの最小構成（CPU固定）で確実に1本出す。
-            render.jlog(f"[render] フル描画失敗 → 互換モード(字幕・演出なし)で再試行: "
-                        f"{str(e_logo).splitlines()[0] if str(e_logo).strip() else ''}")
+            # ③ 字幕維持モード: CPU(libx264)固定・演出/ロゴ無しだが「字幕・タイトルは焼き込む」。
+            #    NVENCや冒頭演出が原因でも字幕を残せる（同梱フォントはローカルに配置済みで確実）。
+            try:
+                render.jlog(f"[render] ①/②失敗 → ③字幕維持モードへ: {_first_line(e1)}")
+                _render(None, intro_use="none", force_cpu=True)
+                m["_render_mode"] = "subs"
+                recovered = True
+            except render.RenderError as e3:
+                e1 = e3
+        if not recovered:
+            # ④ 最後の砦: 字幕・演出・ロゴ無しの最小構成（CPU固定）で確実に1本出す。
+            render.jlog(f"[render] ③失敗 → ④互換モード(字幕なし)で再試行: {_first_line(e1)}")
             render.render_compat(
                 input_video, float(m["start"]), float(m["end"]) - float(m["start"]),
                 out_mp4, reframe_mode=m.get("reframe"), letterbox_color=lb_color,
@@ -483,6 +496,7 @@ def run_job(
     results_by_id: dict[int, ClipResult] = {}
     errors_by_id: dict[int, Exception] = {}
     compat_ids: list[int] = []
+    subs_ids: list[int] = []
     done = 0
     prog_lock = threading.Lock()
     with ThreadPoolExecutor(max_workers=min(_max_render_workers(), max(1, n))) as ex:
@@ -496,6 +510,8 @@ def run_job(
                 i, h, out_mp4, thumb, render_mode = fut.result()
                 if render_mode == "compat":
                     compat_ids.append(i)
+                elif render_mode == "subs":
+                    subs_ids.append(i)
                 results_by_id[i] = ClipResult(
                     id=i,
                     title=h.title,
@@ -515,6 +531,10 @@ def run_job(
 
     for i in sorted(results_by_id):
         result.clips.append(results_by_id[i])
+    if subs_ids:
+        smsg = f"{len(subs_ids)}本は簡易モード（字幕あり・演出/ロゴなし）で作成しました"
+        render.jlog(f"[result] {smsg} ids={sorted(subs_ids)}")
+        result.warning = (result.warning + " " + smsg) if result.warning else smsg
     if compat_ids:
         cmsg = f"{len(compat_ids)}本は互換モード（字幕・演出なし）で作成しました（通常描画が失敗したため）"
         render.jlog(f"[result] {cmsg} ids={sorted(compat_ids)}")

@@ -447,6 +447,7 @@ def render_clip(
     logo: dict | None = None,
     fonts_dir: str | Path | None = FONTS_DIR,
     ffmpeg: str = FFMPEG,
+    force_cpu: bool = False,
 ) -> Path:
     """1 クリップを描画して out_path に書き出す。logo 指定時は同一パスで合成（再エンコード削減）。
 
@@ -467,7 +468,8 @@ def render_clip(
         with _ascii_workspace(out_path, inputs) as (work, out_name, in_args):
             # ASS を作業フォルダに配置（filtergraph では basename 参照）
             (work / ass_name).write_text(ass_content, encoding="utf-8")
-            ass_opt = _fontsdir_opt(ass_name, work, fonts_dir)
+            fonts_local = _stage_fonts(work, fonts_dir, out_path.stem)
+            ass_opt = _fontsdir_opt(ass_name, fonts_local)
 
             # リフレーム → 字幕焼き込み → 冒頭トランジション（映像） → ロゴ（最前面）の順。
             vf_parts = [_reframe_filter(mode, letterbox_color), f"ass={ass_opt}"]
@@ -502,23 +504,53 @@ def render_clip(
                 ]
                 return args
 
-            _run_with_nvenc_fallback(build, cwd=work, ffmpeg=ffmpeg,
-                                     label=f"render_clip {out_path.name}")
+            if force_cpu:
+                _run(build(False), cwd=work, label=f"render_clip {out_path.name} force_cpu")
+            else:
+                _run_with_nvenc_fallback(build, cwd=work, ffmpeg=ffmpeg,
+                                         label=f"render_clip {out_path.name}")
+            # 高速パス(work=出力先)ではステージしたフォントを後片付け（一時パスは workspace が rmtree）
+            if fonts_local and (work / fonts_local).parent == out_path.parent:
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(work / fonts_local, ignore_errors=True)
     finally:
         if _in_cleanup:
             _in_cleanup()
     return out_path
 
 
-def _fontsdir_opt(ass_name: str, out_dir: Path, fonts_dir) -> str:
-    if fonts_dir and Path(fonts_dir).exists():
-        try:
-            rel = os.path.relpath(Path(fonts_dir).resolve(), out_dir.resolve())
-            return f"{ass_name}:fontsdir={rel.replace(chr(92), '/')}"
-        except ValueError:
-            fd = str(Path(fonts_dir)).replace("\\", "/").replace(":", "\\:")
-            return f"{ass_name}:fontsdir={fd}"
-    return ass_name
+def _stage_fonts(work: Path, fonts_dir, tag: str) -> str | None:
+    """同梱フォントを作業フォルダ内 `_fonts_<tag>/` へコピーし、その相対名を返す。
+
+    従来は fontsdir に FONTS_DIR への相対/絶対パスを渡していたが、パスに空白
+    （例: "Program Files"）・ドライブ ":"・別ドライブ相対化(ValueError)が絡むと
+    libass がフォントを読めず ass フィルタ初期化が失敗していた（→字幕が焼けない）。
+    フォントを cwd 直下の ASCII 名フォルダに置き `fontsdir=_fonts_<tag>` と渡すことで、
+    フィルタ文字列から空白・コロン・".."・バックスラッシュを完全に排除する。
+    tag はクリップ毎に一意（＝out basename）にし、同一 job_dir で並列描画しても衝突しない。
+    """
+    if not (fonts_dir and Path(fonts_dir).exists()):
+        return None
+    name = "_fonts_" + re.sub(r"[^A-Za-z0-9_]", "", tag or "x")
+    dest = work / name
+    copied = 0
+    try:
+        dest.mkdir(exist_ok=True)
+        for f in Path(fonts_dir).iterdir():
+            if f.suffix.lower() in (".ttf", ".otf", ".ttc"):
+                try:
+                    shutil.copy2(f, dest / f.name)
+                    copied += 1
+                except OSError:
+                    pass
+    except OSError:
+        return None
+    return name if copied else None
+
+
+def _fontsdir_opt(ass_name: str, fonts_local: str | None) -> str:
+    """ass フィルタ引数。fonts_local は _stage_fonts が返す cwd 相対のASCII名（無ければ None）。"""
+    return f"{ass_name}:fontsdir={fonts_local}" if fonts_local else ass_name
 
 
 def render_clip_segments(
@@ -534,6 +566,7 @@ def render_clip_segments(
     logo: dict | None = None,
     fonts_dir: str | Path | None = FONTS_DIR,
     ffmpeg: str = FFMPEG,
+    force_cpu: bool = False,
 ) -> Path:
     """残し区間 keeps（クリップ先頭基準）を trim→concat で詰めて 1 本に描画する。
 
@@ -587,7 +620,8 @@ def render_clip_segments(
         inputs = [input_video] + ([logo_path] if use_logo else [])
         with _ascii_workspace(out_path, inputs) as (work, out_name, in_args):
             (work / ass_name).write_text(ass_content, encoding="utf-8")
-            ass_opt = _fontsdir_opt(ass_name, work, fonts_dir)
+            fonts_local = _stage_fonts(work, fonts_dir, out_path.stem)
+            ass_opt = _fontsdir_opt(ass_name, fonts_local)
             vchain = f"[cv]{_reframe_filter(mode, letterbox_color)},ass={ass_opt}" + (f",{intro_v}" if intro_v else "") + vlast
             if has_audio:
                 achain = (f"[ca]{intro_a}[aout]" if intro_a else None)
@@ -619,8 +653,14 @@ def render_clip_segments(
                 args += ["-movflags", "+faststart", out_name]
                 return args
 
-            _run_with_nvenc_fallback(build, cwd=work, ffmpeg=ffmpeg,
-                                     label=f"render_clip_segments {out_path.name}")
+            if force_cpu:
+                _run(build(False), cwd=work, label=f"render_clip_segments {out_path.name} force_cpu")
+            else:
+                _run_with_nvenc_fallback(build, cwd=work, ffmpeg=ffmpeg,
+                                         label=f"render_clip_segments {out_path.name}")
+            if fonts_local and (work / fonts_local).parent == out_path.parent:
+                with contextlib.suppress(OSError):
+                    shutil.rmtree(work / fonts_local, ignore_errors=True)
     finally:
         if _in_cleanup:
             _in_cleanup()
