@@ -382,7 +382,20 @@ def _wrap_lines(text: str, max_chars: int, max_lines: int | None = None) -> list
 
 
 def _wrap_static(text: str, max_chars: int, max_lines: int = 2) -> list[str]:
-    """テロップ表示用の折返し（max_lines 行まで）。"""
+    """テロップ表示用の折返し（max_lines 行まで）。
+
+    編集UIで入力された手動改行（\n）は尊重し、その行構成を優先する
+    （各行はさらに幅で折返し・最大4行まで）。改行なしは従来の自動折返し。
+    """
+    manual = [p.strip() for p in str(text or "").split("\n") if p.strip()]
+    if len(manual) > 1:
+        limit = max(max_lines, min(4, len(manual)))
+        out: list[str] = []
+        for part in manual:
+            out.extend(_wrap_lines(part, max_chars))
+            if len(out) >= limit:
+                break
+        return out[:limit]
     return _wrap_lines(text, max_chars, max_lines)
 
 

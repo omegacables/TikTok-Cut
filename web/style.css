@@ -536,3 +536,27 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .job-name { font-weight: 600; font-size: .95rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .job-meta { color: var(--muted); font-size: .8rem; margin-top: 3px; }
 .job-item .dl-btn { flex-shrink: 0; width: auto; padding: 8px 18px; }
+
+/* ===== 再生中は編集オーバーレイを隠す（焼き込み字幕との二重表示防止） ===== */
+.ed-frame.pv-playing .ed-chip { display: none !important; }
+
+/* ===== 編集ページの文字サイズ拡大（視認性向上・v0.6.1） ===== */
+#tab-detail .slider-item { font-size: .92rem; }
+#tab-detail .ed-label { font-size: .88rem; }
+#tab-detail .ed-title { font-size: 1.02rem; padding: 10px 12px; }
+#tab-detail .ed-text { font-size: .98rem; }
+#tab-detail .ed-block-text { font-size: .95rem; }
+#tab-detail .ed-loading { font-size: .95rem; }
+#tab-detail .ed-t-s, #tab-detail .ed-t-e, #tab-detail .ed-t-layer { font-size: .88rem; width: 58px; }
+#tab-detail .ed-t-anim { font-size: .85rem; max-width: 112px; }
+#tab-detail .ed-t-sep, #tab-detail .ed-time, #tab-detail .ed-pal-lbl,
+#tab-detail .ed-tl-colhead { font-size: .84rem; }
+#tab-detail .ed-alert, #tab-detail .ed-flag { font-size: .8rem; }
+#tab-detail .ed-adv > label { font-size: .82rem; }
+#tab-detail .ed-tc { font-size: .84rem; min-width: 48px; }
+#tab-detail .ed-save { font-size: .95rem; padding: 11px 18px; }
+#tab-detail .ed-status { font-size: .92rem; }
+#tab-detail .ed-extend-row label { font-size: .95rem; }
+#tab-detail .hint { font-size: .86rem; }
+#tab-detail .ed-sel-tel label { font-size: .88rem; }
+#tab-detail select, #tab-detail input[type="number"] { font-size: .9rem; }

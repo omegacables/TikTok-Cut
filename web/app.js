@@ -1486,6 +1486,7 @@ async function loadEditor(ed) {
     // プレビューは左の動画上のオーバーレイに描画＝編集中の字幕が「再生される動画」にそのまま乗る。
     // 毎回オーバーレイを作り直してタイトルチップを入れ直す（リスナー重複・前クリップ残りを防ぐ）。
     ed._frame = document.getElementById('detailPvFrame');
+    if (ed._frame) ed._frame.classList.remove('pv-playing');   // クリップ切替時にリセット
     if (ed._frame) {
       ed._frame.innerHTML = '<div class="ed-chip ed-wys ed-ct" style="left:' + (tp0.x * 100) + '%;top:' + (tp0.y * 100) + '%"></div>';
     }
@@ -1533,26 +1534,43 @@ function wireEditorPreview(ed) {
   if (eAnim) eAnim.addEventListener('change', () => { updateEditorPreview(ed); renderPreviewTelops(ed, true); });
   const eEff = ed.querySelector('.ed-effect');
   if (eEff) eEff.addEventListener('change', upd);
-  // 動画の再生位置に同期してプレビューのテロップを更新（全変更を反映）
+  // 動画の再生位置に同期してプレビューのテロップを更新（全変更を反映）。
+  // 再生中は動画自体に字幕が焼き込まれているため、編集用オーバーレイを隠して
+  // 二重表示（見づらさ）を防ぐ。停止中だけ編集チップを重ねる。
   const v = _clipVideo(ed);
   if (v && !v._edPreviewWired) {
     v._edPreviewWired = true;
-    v.addEventListener('timeupdate', () => { const e = document.getElementById('detailEditor'); if (e && e.dataset.loaded) renderPreviewTelops(e); });
-    v.addEventListener('seeking', () => { const e = document.getElementById('detailEditor'); if (e && e.dataset.loaded) renderPreviewTelops(e); });
+    const _re = () => { const e = document.getElementById('detailEditor'); if (e && e.dataset.loaded) renderPreviewTelops(e); };
+    v.addEventListener('timeupdate', _re);
+    v.addEventListener('seeking', _re);
+    v.addEventListener('play', () => {
+      const f = _edFrame(ed); if (f) f.classList.add('pv-playing');
+      _re();
+    });
+    v.addEventListener('pause', () => {
+      const f = _edFrame(ed); if (f) f.classList.remove('pv-playing');
+      _re();
+    });
   }
 }
 
 // render(_wrap_static) と同様に文字数で折返す近似（プレビューの行数を実描画に合わせ位置一致）
 function _pvWrap(text, maxChars, maxLines) {
-  text = String(text || '').replace(/\n/g, '').trim();
-  if (!text) return [''];
-  const lines = []; let cur = '';
-  for (const ch of Array.from(text)) {
-    if (cur.length >= maxChars) { lines.push(cur); cur = ''; if (lines.length >= maxLines) break; }
-    cur += ch;
+  // 手動改行（\n）は行構成として尊重（実描画の _wrap_static と同じ規則・最大4行）
+  const parts = String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
+  if (!parts.length) return [''];
+  const limit = parts.length > 1 ? Math.max(maxLines, Math.min(4, parts.length)) : maxLines;
+  const lines = [];
+  for (const part of parts) {
+    let cur = '';
+    for (const ch of Array.from(part)) {
+      if (cur.length >= maxChars) { lines.push(cur); cur = ''; if (lines.length >= limit) break; }
+      cur += ch;
+    }
+    if (cur && lines.length < limit) lines.push(cur);
+    if (lines.length >= limit) break;
   }
-  if (cur && lines.length < maxLines) lines.push(cur);
-  return lines.slice(0, maxLines);
+  return lines.slice(0, limit);
 }
 function _pvWrapHtml(text, maxChars, maxLines) {
   return _pvWrap(text, maxChars, maxLines).map(esc).join('<br>');
@@ -1569,7 +1587,7 @@ function updateEditorPreview(ed) {
   const titleTxt = ((ed.querySelector('.ed-title') || {}).value || '').trim() || 'タイトル';
   // タイトル（実描画と同じ文字数で折返し＝行数一致で位置一致）
   const ttlSz = num('.ed-ttlsz', 80);
-  ct.innerHTML = _pvWrapHtml(titleTxt, Math.max(6, Math.floor(1080 * 0.72 / ttlSz)), 2);
+  ct.innerHTML = _pvWrapHtml(titleTxt, Math.max(6, Math.floor(1080 * 0.66 / ttlSz)), 2);   // 0.66=実描画の_WIDTH_RATIOと一致（行数一致→位置一致）
   ct.style.fontFamily = ff;
   ct.style.color = pv.title;
   ct.style.fontSize = Math.max(7, ttlSz * sc) + 'px';
@@ -1586,6 +1604,15 @@ function renderPreviewTelops(ed, replay, opts) {
   opts = opts || {};
   const frame = opts.frame || _edFrame(ed);
   if (!frame) return;
+  // 再生中は動画の焼き込み字幕が本物のプレビュー。編集チップを重ねると二重表示で
+  // 見づらいため、停止中のみチップを描く（モーダル(opts.frame)や強制時は除外）。
+  if (!opts.frame && !opts.force) {
+    const vp = _clipVideo(ed);
+    if (vp && !vp.paused && !vp.ended) {
+      frame.querySelectorAll('.ed-tel-chip').forEach(n => n.remove());
+      return;
+    }
+  }
   const telops = opts.telops || ed._telops || [];
   const noDrag = !!opts.noDrag;
   const clipAnim = ((ed.querySelector('.ed-anim') || {}).value) || 'default';
@@ -1613,7 +1640,7 @@ function renderPreviewTelops(ed, replay, opts) {
     if (tp.emphasis) { size = capSz * 1.5; color = pv.emph || '#FFE600'; }
     else if (tp.style === 'laugh') { color = '#27E36B'; }
     else if (tp.style === 'comment') { color = '#202020'; }
-    chip.innerHTML = _pvWrapHtml(tp.text, Math.max(6, Math.floor(1080 * 0.72 / size)), 2);
+    chip.innerHTML = _pvWrapHtml(tp.text, Math.max(6, Math.floor(1080 * 0.66 / size)), 2);   // 0.66=実描画の_WIDTH_RATIOと一致
     chip.style.color = color;
     chip.style.fontSize = Math.max(7, size * sc) + 'px';
     if (tp.style === 'comment') {

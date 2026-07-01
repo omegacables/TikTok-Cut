@@ -305,9 +305,10 @@ class Settings:
     # "" で無効（synth 時刻＝従来の均等割りに戻す）。small=日本語精度高・推奨, base=軽量/高速だが日本語弱い。
     kotoba_timing_donor: str = field(default_factory=lambda: _env("KOTOBA_TIMING_DONOR", "small"))
 
-    # クリップ条件（TikTok の最適尺）
+    # クリップ条件（TikTok の最適尺）。max はオチまで収める余裕を持たせる
+    # （60だと _sanitize のクランプで「良い所の手前」で切れる事故があった）。
     clip_min_sec: float = 18.0
-    clip_max_sec: float = 60.0
+    clip_max_sec: float = 90.0
     default_clip_count: int = 5
 
     # 9:16 リフレーム方式: "crop"(中央クロップ=全画面) / "letterbox"(上下黒帯) / "blur"(背景ぼかし)
