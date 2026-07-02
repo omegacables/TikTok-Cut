@@ -9,6 +9,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   selectVideo: () => ipcRenderer.invoke('select-video'),
   // 生成済みクリップ（サーバ相対パス）を任意の場所へ保存
   saveFile: (serverPath, saveName) => ipcRenderer.invoke('save-file', serverPath, saveName),
+  // 全クリップ一括保存（フォルダ選択→まとめてコピー）
+  saveAll: (items) => ipcRenderer.invoke('save-all', items),
   // 設定（Gemini APIキー等）の取得/保存（保存後アプリ再起動で反映）
   getSettings: () => ipcRenderer.invoke('get-settings'),
   saveSettings: (s) => ipcRenderer.invoke('save-settings', s),

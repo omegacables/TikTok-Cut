@@ -683,6 +683,7 @@ def build_ass(
     animation: str | None = None,
     effect: str | None = None,
     caption_size: float | None = None,
+    caption_width: float | None = None,   # 字幕の折返し幅（0.35〜0.95・既定 _WIDTH_RATIO）
     title_size: float | None = None,
     title_width: float | None = None,     # タイトルの折返し幅（0.35〜0.95・既定 _WIDTH_RATIO）
     outline_width: float | None = None,
@@ -814,9 +815,11 @@ def build_ass(
     _ALERT_POS = {"x": 0.5, "y": 0.33}
     _LAUGH_POS = {"x": 0.78, "y": 0.45}
 
-    # タイトルの折返し幅（title_width=0.35〜0.95・既定は _WIDTH_RATIO）。編集UIの「タイトル幅」。
+    # タイトル/字幕の折返し幅（0.35〜0.95・既定 _WIDTH_RATIO）。編集UIの「タイトル幅」「字幕幅」。
     ttl_ratio = _clamp(title_width, 0.35, 0.95, _WIDTH_RATIO)
     ttl_chars = max(4, int(OUTPUT_W * ttl_ratio / max(1, ttl_size)))
+    cap_ratio = _clamp(caption_width, 0.35, 0.95, _WIDTH_RATIO)
+    cap_chars = max(4, int(OUTPUT_W * cap_ratio / max(1, cap_size)))
 
     if title.strip():
         emit(0.0, clip_duration, "Title", _wrap_static(title, ttl_chars, 2),
@@ -862,7 +865,7 @@ def build_ass(
             emit(s, e, "Emphasis", _wrap_static(text, _max_chars(emph_size), cap.max_lines),
                  ov, emph_c, emph_size, zlayer=zl)
         else:   # テロップ個別の position/animation があればクリップ既定を上書き
-            emit(s, e, "Caption", _wrap_static(text, _max_chars(cap_size), cap.max_lines),
+            emit(s, e, "Caption", _wrap_static(text, cap_chars, cap.max_lines),
                  _pos_tag(tp_pos or eff_caption_pos) + _anim_group(tp.get("animation") or animation, "caption", animate),
                  sub_c, cap_size, zlayer=zl)
 

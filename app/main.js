@@ -266,6 +266,30 @@ ipcMain.handle('save-file', async (_e, serverPath, saveName) => {
   return { ok: true, path: res.filePath };
 });
 
+// ---- IPC: 全クリップ一括保存（フォルダ選択→まとめてコピー） ----
+ipcMain.handle('save-all', async (_e, items) => {
+  const w = _win(); if (!w) return { cancelled: true };
+  if (!Array.isArray(items) || !items.length) return { error: '保存対象がありません' };
+  const res = await dialog.showOpenDialog(w, {
+    title: '保存先フォルダを選択', properties: ['openDirectory', 'createDirectory'],
+  });
+  if (res.canceled || !res.filePaths.length) return { cancelled: true };
+  const dir = res.filePaths[0];
+  const root = path.resolve(OUTPUT_ROOT);
+  let count = 0;
+  for (const it of items) {
+    try {
+      const abs = path.resolve(root, String((it && it.serverPath) || ''));
+      if (abs !== root && !abs.startsWith(root + path.sep)) continue;   // パストラバーサル防止
+      if (!fs.existsSync(abs)) continue;
+      const name = String((it && it.saveName) || path.basename(abs)).replace(/[\\/:*?"<>|]/g, '');
+      fs.copyFileSync(abs, path.join(dir, name || path.basename(abs)));
+      count++;
+    } catch (_) { /* 1本失敗しても続行 */ }
+  }
+  return count ? { ok: true, dir, count } : { error: '保存できるファイルがありませんでした' };
+});
+
 // ---- IPC: 保存先フォルダ選択 ----
 ipcMain.handle('select-folder', async () => {
   const w = _win(); if (!w) return null;

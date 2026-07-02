@@ -339,6 +339,9 @@ function esc(s) {
 }
 
 function renderClips(clips) {
+  window._lastClips = clips || [];   // 「すべて保存」用に保持
+  const sab = document.getElementById('saveAllBar');
+  if (sab) sab.hidden = !(clips && clips.length);
   const grid = document.getElementById('clipGrid');
   grid.innerHTML = '';
   clips.forEach(c => {
@@ -376,6 +379,28 @@ function renderClips(clips) {
 function fmt(sec) {
   const m = Math.floor(sec / 60), s = Math.floor(sec % 60);
   return m + ':' + String(s).padStart(2, '0');
+}
+
+// 全クリップを一括保存（アプリ版=フォルダ選択して一括コピー／ブラウザ=順次ダウンロード）
+async function saveAllClips() {
+  const clips = window._lastClips || [];
+  const st = document.getElementById('saveAllStatus');
+  if (!clips.length) return;
+  const safe = s => String(s || 'clip').replace(/[\\/:*?"<>|]/g, '').slice(0, 60);
+  if (electron && electron.saveAll) {
+    st.textContent = '保存先を選択してください...';
+    const items = clips.map(c => ({
+      serverPath: c.file_path,
+      saveName: String(c.id).padStart(2, '0') + '_' + safe(c.title) + '.mp4',
+    }));
+    const res = await electron.saveAll(items);
+    if (res && res.ok) st.textContent = '✓ ' + res.count + '本を保存しました: ' + res.dir;
+    else if (res && res.error) st.textContent = 'エラー: ' + res.error;
+    else st.textContent = '';
+  } else {
+    clips.forEach(c => downloadClip(encodeURI(c.file_path), safe(c.title)));
+    st.textContent = '✓ ダウンロードを開始しました';
+  }
 }
 
 function downloadClip(path, title) {
@@ -1415,6 +1440,7 @@ async function loadEditor(ed) {
     const capOl = st.outline_width != null ? st.outline_width : 6;
     const ttlOl = st.title_outline_width != null ? st.title_outline_width : 8;
     const ttlW = Math.round((st.title_width || 0.66) * 100);   // タイトル折返し幅（%）
+    const capW = Math.round((st.caption_width || 0.66) * 100); // 字幕折返し幅（%）
     const animV = st.animation || 'default';
     const effV = st.effect || 'none';
     // WYSIWYG プレビュー用に、クリップのフォント・色・枠を控える（再描画前の見た目確認）
@@ -1435,6 +1461,8 @@ async function loadEditor(ed) {
             '<input type="range" class="ed-capsz" min="48" max="120" step="2" value="' + capSz + '"></label>' +
           '<label class="slider-item">字幕の縁取り <b class="ed-capol-o">' + capOl + '</b>' +
             '<input type="range" class="ed-capol" min="0" max="16" step="1" value="' + capOl + '"></label>' +
+          '<label class="slider-item">字幕幅 <b class="ed-capw-o">' + capW + '</b>%' +
+            '<input type="range" class="ed-capw" min="35" max="95" step="1" value="' + capW + '"></label>' +
           '<label class="slider-item">タイトルサイズ <b class="ed-ttlsz-o">' + ttlSz + '</b>' +
             '<input type="range" class="ed-ttlsz" min="50" max="140" step="2" value="' + ttlSz + '"></label>' +
           '<label class="slider-item">タイトルの縁取り <b class="ed-ttlol-o">' + ttlOl + '</b>' +
@@ -1536,6 +1564,8 @@ function wireEditorPreview(ed) {
   ['.ed-capsz', '.ed-capol', '.ed-ttlsz', '.ed-ttlol', '.ed-ttlw'].forEach(s => {
     const e = ed.querySelector(s); if (e) e.addEventListener('input', upd);
   });
+  const eCapw = ed.querySelector('.ed-capw');
+  if (eCapw) eCapw.addEventListener('input', () => { updateEditorPreview(ed); renderPreviewTelops(ed); });
   const eAnim = ed.querySelector('.ed-anim');
   if (eAnim) eAnim.addEventListener('change', () => { updateEditorPreview(ed); renderPreviewTelops(ed, true); });
   const eEff = ed.querySelector('.ed-effect');
@@ -1626,6 +1656,7 @@ function updateEditorPreview(ed) {
   ct.style.background = 'transparent'; ct.style.padding = '0';
   // 折返し幅を破線の箱として可視化＝左右端ドラッグ（幅ハンドル）の手応えを見せる
   ct.style.width = (ttlW * 100) + '%';
+  ct.style.maxWidth = 'none';
   ct.style.textAlign = 'center';
   _syncTitleChipVis(ed);   // 再生中でもタイトルを編集したら即チップを出す
   renderPreviewTelops(ed);   // 再生位置にアクティブな全テロップを実スタイルで表示
@@ -1665,6 +1696,7 @@ function renderPreviewTelops(ed, replay, opts) {
   const t = v ? (v.currentTime || 0) : 0;
   const def = ed._capPos || { x: 0.5, y: 0.72 };
   const capSz = +((ed.querySelector('.ed-capsz') || {}).value) || 74;
+  const capW = (+((ed.querySelector('.ed-capw') || {}).value) || 66) / 100;   // 字幕折返し幅（実描画と一致）
   const capOl = (() => { const e = ed.querySelector('.ed-capol'); const n = e ? +e.value : NaN; return isNaN(n) ? 6 : n; })();
   const ff = pv.font ? `'${pv.font}', sans-serif` : 'sans-serif';
   const soff = +ed._subOffset || 0;   // 字幕タイミング（プレビューを実描画に合わせてずらす）
@@ -1688,9 +1720,19 @@ function renderPreviewTelops(ed, replay, opts) {
     if (tp.emphasis) { size = capSz * 1.5; color = pv.emph || '#FFE600'; }
     else if (tp.style === 'laugh') { color = '#27E36B'; }
     else if (tp.style === 'comment') { color = '#202020'; }
-    chip.innerHTML = _pvWrapHtml(tp.text, Math.max(6, Math.floor(1080 * 0.66 / size)), 2);   // 0.66=実描画の_WIDTH_RATIOと一致
+    // 折返し幅: 通常字幕は「字幕幅」設定、強調/特殊は既定0.66（実描画と同じ規則）
+    const plain = !tp.style && !tp.emphasis;
+    const wr = plain ? capW : 0.66;
+    chip.innerHTML = _pvWrapHtml(tp.text, Math.max(4, Math.floor(1080 * wr / size)), 2);
     chip.style.color = color;
     chip.style.fontSize = Math.max(7, size * sc) + 'px';
+    if (plain && !pv.box) {   // 破線箱=折返し幅（左右端ドラッグで幅・右下グリップでサイズ）
+      chip.style.width = (capW * 100) + '%';
+      chip.style.maxWidth = 'none';
+      chip.style.textAlign = 'center';
+      chip.classList.add('ed-has-w');   // 左端の幅ハンドルを表示
+      chip.title = 'ドラッグ=移動／右下グリップ=サイズ／左右端=幅';
+    }
     if (tp.style === 'comment') {
       chip.style.background = '#fff'; chip.style.padding = '2px 6px'; chip.style.borderRadius = '4px'; chip.style.webkitTextStroke = '0px transparent';
     } else if (pv.box && !tp.emphasis && !tp.style) {
@@ -1713,19 +1755,68 @@ function renderPreviewTelops(ed, replay, opts) {
 }
 function _attachTelopChipDrag(ed, chip, ti) {
   const frame = _edFrame(ed);
-  let dragging = false;
+  let dragging = false, resizing = false, widthing = false, rz = null;
   chip.addEventListener('pointerdown', e => {
-    dragging = true; try { chip.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault();
+    const r = chip.getBoundingClientRect();
+    const tp = ed._telops[ti];
+    const plain = tp && !tp.style && !tp.emphasis;
+    const inGrip = (e.clientX > r.right - 20 && e.clientY > r.bottom - 20);   // 右下=サイズ
+    const onSide = plain && !inGrip
+      && (e.clientX < r.left + 14 || e.clientX > r.right - 14);              // 左右端=幅
+    try { chip.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault();
+    if (inGrip) {
+      resizing = true;
+      const szInp = ed.querySelector('.ed-capsz'), olInp = ed.querySelector('.ed-capol');
+      rz = { cx: r.left + r.width / 2, cy: r.top + r.height / 2,
+             d0: Math.hypot(e.clientX - (r.left + r.width / 2), e.clientY - (r.top + r.height / 2)) || 1,
+             s0: +szInp.value, o0: +olInp.value };
+    } else if (onSide) { widthing = true; }
+    else { dragging = true; }
   });
   chip.addEventListener('pointermove', e => {
-    if (!dragging) return;
-    const r = frame.getBoundingClientRect();
-    const x = Math.max(0.03, Math.min(0.97, (e.clientX - r.left) / r.width));
-    const y = Math.max(0.03, Math.min(0.97, (e.clientY - r.top) / r.height));
-    chip.style.left = (x * 100) + '%'; chip.style.top = (y * 100) + '%';
-    const tp = ed._telops[ti]; if (tp) tp.pos = { x: +x.toFixed(3), y: +y.toFixed(3) };
+    const tp = ed._telops[ti];
+    if (resizing) {
+      // 右下グリップ=字幕サイズ（全字幕共通・実描画と同じモデル）。縁取りも比例。
+      const d = Math.hypot(e.clientX - rz.cx, e.clientY - rz.cy);
+      const ratio = Math.max(0.35, Math.min(3, d / rz.d0));
+      const szInp = ed.querySelector('.ed-capsz'), olInp = ed.querySelector('.ed-capol');
+      let ns = Math.round((rz.s0 * ratio) / (+szInp.step || 1)) * (+szInp.step || 1);
+      ns = Math.max(+szInp.min, Math.min(+szInp.max, ns));
+      szInp.value = ns;
+      let no = Math.round(rz.o0 * ns / (rz.s0 || 1));
+      olInp.value = Math.max(+olInp.min, Math.min(+olInp.max, no));
+      const so = ed.querySelector('.ed-capsz-o'); if (so) so.textContent = ns;
+      const oo = ed.querySelector('.ed-capol-o'); if (oo) oo.textContent = olInp.value;
+      // ドラッグ中は再描画せず（チップ再生成でドラッグが切れる）このチップだけ即時反映
+      const sc = (frame.clientWidth || 230) / 1080;
+      chip.style.fontSize = Math.max(7, ns * (tp && tp.emphasis ? 1.5 : 1) * sc) + 'px';
+    } else if (widthing) {
+      // 左右端=字幕幅（折返し幅）。チップ中心からの距離×2＝新しい幅
+      const fr = frame.getBoundingClientRect();
+      const pos = (tp && tp.pos) || ed._capPos || { x: 0.5, y: 0.72 };
+      const centerX = fr.left + pos.x * fr.width;
+      const ratio = Math.max(0.35, Math.min(0.95, (Math.abs(e.clientX - centerX) * 2) / fr.width));
+      const wInp = ed.querySelector('.ed-capw'); if (!wInp) return;
+      const pct = Math.round(ratio * 100);
+      if (+wInp.value !== pct) {
+        wInp.value = pct;
+        const wo = ed.querySelector('.ed-capw-o'); if (wo) wo.textContent = pct;
+        chip.style.width = pct + '%';
+      }
+    } else if (dragging) {
+      const r = frame.getBoundingClientRect();
+      const x = Math.max(0.03, Math.min(0.97, (e.clientX - r.left) / r.width));
+      const y = Math.max(0.03, Math.min(0.97, (e.clientY - r.top) / r.height));
+      chip.style.left = (x * 100) + '%'; chip.style.top = (y * 100) + '%';
+      if (tp) tp.pos = { x: +x.toFixed(3), y: +y.toFixed(3) };
+    }
   });
-  const up = e => { dragging = false; try { chip.releasePointerCapture(e.pointerId); } catch (_) {} };
+  const up = e => {
+    const redo = resizing || widthing;
+    dragging = false; resizing = false; widthing = false;
+    try { chip.releasePointerCapture(e.pointerId); } catch (_) {}
+    if (redo) renderPreviewTelops(ed);   // サイズ/幅確定後に全チップを正しいスタイルで再描画
+  };
   chip.addEventListener('pointerup', up);
   chip.addEventListener('pointercancel', up);
 }
@@ -2045,7 +2136,7 @@ function initPosEditor(ed) {
   };
   bind('.ed-capsz', '.ed-capsz-o'); bind('.ed-ttlsz', '.ed-ttlsz-o');
   bind('.ed-capol', '.ed-capol-o'); bind('.ed-ttlol', '.ed-ttlol-o');
-  bind('.ed-ttlw', '.ed-ttlw-o');
+  bind('.ed-ttlw', '.ed-ttlw-o'); bind('.ed-capw', '.ed-capw-o');
 }
 
 function resetPos(btn) {
@@ -2075,6 +2166,7 @@ function _editorPayload(ed) {
   q('.ed-capsz', 'caption_size'); q('.ed-ttlsz', 'title_size');
   q('.ed-capol', 'outline_width'); q('.ed-ttlol', 'title_outline_width');
   const tw = ed.querySelector('.ed-ttlw'); if (tw) style.title_width = (+tw.value || 66) / 100;   // タイトル幅（%→比率）
+  const cw = ed.querySelector('.ed-capw'); if (cw) style.caption_width = (+cw.value || 66) / 100; // 字幕幅（%→比率）
   const qs = (sel, key) => { const e = ed.querySelector(sel); if (e) style[key] = e.value; };
   qs('.ed-anim', 'animation'); qs('.ed-effect', 'effect');
   const num = sel => { const e = ed.querySelector(sel); return e ? (+e.value || 0) : 0; };
