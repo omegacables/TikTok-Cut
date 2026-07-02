@@ -342,7 +342,7 @@ function showError(msg) {
 function resetStartBtn() {
   const btn = document.getElementById('startBtn');
   btn.disabled = false;
-  btn.textContent = '作成開始';
+  btn.textContent = '✨ 切り抜きを作成する';
 }
 
 function esc(s) {

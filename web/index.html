@@ -145,11 +145,11 @@
   <div id="subTooltip" class="sub-tooltip" hidden></div>
 
   <nav class="tabs">
-    <button class="tab active" data-tab="create" onclick="switchTab('create')">作成</button>
+    <button class="tab active" data-tab="create" onclick="switchTab('create')"><span class="tab-ic">✨</span>作成</button>
     <button class="tab" data-tab="result" id="resultTabBtn" onclick="switchTab('result')" disabled>
-      結果<span id="clipBadge" class="badge" hidden>0</span>
+      <span class="tab-ic">🎬</span>結果<span id="clipBadge" class="badge" hidden>0</span>
     </button>
-    <button class="tab" data-tab="detail" id="detailTabBtn" onclick="switchTab('detail')" disabled>詳細編集</button>
+    <button class="tab" data-tab="detail" id="detailTabBtn" onclick="switchTab('detail')" disabled><span class="tab-ic">✂️</span>詳細編集</button>
   </nav>
 
   <!-- ===== 作成タブ ===== -->
@@ -168,29 +168,46 @@
     </div>
 
     <div class="card" id="createCard">
-      <div class="field">
-        <label for="urlInput">YouTube アーカイブ URL <span class="opt">（任意・字幕精度向上用）</span></label>
-        <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=...">
+      <div class="step-head">
+        <span class="step-num">1</span>
+        <div>
+          <div class="step-title">動画を選ぶ</div>
+          <div class="step-sub">配信アーカイブをそのまま読み込みます（外部には送信されません）</div>
+        </div>
       </div>
-
       <div class="field">
-        <label for="titleInput">配信タイトル <span class="opt">（任意・固有名詞の精度向上）</span></label>
-        <input type="text" id="titleInput" placeholder="例: 〇〇の深夜雑談">
-      </div>
-
-      <div class="field">
-        <label>動画ファイル（MP4）<span class="req">必須</span></label>
         <input type="file" id="fileInput" accept=".mp4,.mov,.mkv,.webm,.avi" hidden>
         <button id="selectBtn" class="dropzone" onclick="selectVideo()">
-          <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6">
-            <rect x="2" y="4" width="20" height="16" rx="2"/><polygon points="10,8 16,12 10,16"/>
-          </svg>
-          <span id="fileName">動画を選択</span>
+          <span class="dz-ic">
+            <svg width="30" height="30" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8">
+              <rect x="2" y="4" width="20" height="16" rx="3"/><polygon points="10,8 16,12 10,16"/>
+            </svg>
+          </span>
+          <span class="dz-copy">
+            <span id="fileName">クリックして動画を選択</span>
+            <span class="dz-sub">MP4 / MOV / MKV / WEBM / AVI</span>
+          </span>
         </button>
       </div>
+      <div class="opt-grid">
+        <div class="field">
+          <label for="titleInput">配信タイトル <span class="opt">（任意・固有名詞の精度アップ）</span></label>
+          <input type="text" id="titleInput" placeholder="例: 〇〇の深夜雑談">
+        </div>
+        <div class="field">
+          <label for="urlInput">YouTube アーカイブ URL <span class="opt">（任意）</span></label>
+          <input type="text" id="urlInput" placeholder="https://www.youtube.com/watch?v=...">
+        </div>
+      </div>
 
+      <div class="step-head">
+        <span class="step-num">2</span>
+        <div>
+          <div class="step-title">切り抜き方を決める</div>
+          <div class="step-sub">AIが狙う場面・本数・画面構成・演出を選びます</div>
+        </div>
+      </div>
       <div class="field">
-        <label>切り抜きの選び方</label>
         <div class="mode-tabs">
           <button type="button" class="mode-tab active" data-mode="auto" onclick="switchCreateMode('auto')">おまかせ</button>
           <button type="button" class="mode-tab" data-mode="prompt" onclick="switchCreateMode('prompt')">プロンプト入力</button>
@@ -286,6 +303,13 @@
         </div>
       </div>
 
+      <div class="step-head">
+        <span class="step-num">3</span>
+        <div>
+          <div class="step-title">字幕をデザインする</div>
+          <div class="step-sub">フォント・色・サイズ・影（作成後も「詳細編集」でクリップごとに変更できます）</div>
+        </div>
+      </div>
       <div class="style-section">
         <div class="field">
           <label for="fontSelect">字幕フォント</label>
@@ -347,7 +371,7 @@
         </div>
       </div>
 
-      <button id="startBtn" class="primary" onclick="startProcess()">作成開始</button>
+      <button id="startBtn" class="primary" onclick="startProcess()">✨ 切り抜きを作成する</button>
       <p class="hint">動画は外部に送信されず、文字起こしは PC 内で実行されます。</p>
     </div>
 
