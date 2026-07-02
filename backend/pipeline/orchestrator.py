@@ -107,6 +107,9 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
         box_color=st.get("box_color"),
         box_pad=st.get("box_pad"),
         sub_offset=m.get("sub_offset"),
+        shadow_depth=st.get("shadow_depth"),
+        shadow_alpha=st.get("shadow_alpha"),
+        shadow_blur=st.get("shadow_blur"),
     )
     keeps = m.get("keeps")
     lb_color = m.get("letterbox_color") or "black"
@@ -478,6 +481,9 @@ def run_job(
                 "box": bool(style.get("box")),
                 "box_color": style.get("box_color"),
                 "box_pad": style.get("box_pad"),
+                "shadow_depth": style.get("shadow_depth"),
+                "shadow_alpha": style.get("shadow_alpha"),
+                "shadow_blur": style.get("shadow_blur"),
             },
             "watermark": watermark,
             "logo": logo,

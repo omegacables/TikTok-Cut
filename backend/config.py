@@ -133,6 +133,14 @@ FONTS = [
     {"id": "hachimaru",    "label": "はちまるポップ（激かわ）",  "family": "Hachi Maru Pop",   "category": "cute",   "bundled": True,  "file": "HachiMaruPop-Regular.ttf"},
     {"id": "dotgothic",    "label": "ドットゴシック（レトロ）",  "family": "DotGothic16",      "category": "cute",   "bundled": True,  "file": "DotGothic16-Regular.ttf"},
     {"id": "reggae",       "label": "レゲエ（極太インパクト）",  "family": "Reggae One",       "category": "impact", "bundled": True,  "file": "ReggaeOne-Regular.ttf"},
+    {"id": "delagothic",   "label": "デラゴシック（超極太）",    "family": "Dela Gothic One",  "category": "impact", "bundled": True,  "file": "DelaGothicOne-Regular.ttf"},
+    {"id": "trainone",     "label": "トレイン（袋文字）",        "family": "Train One",        "category": "impact", "bundled": True,  "file": "TrainOne-Regular.ttf"},
+    {"id": "rampartone",   "label": "ランパート（立体袋文字）",  "family": "Rampart One",      "category": "impact", "bundled": True,  "file": "RampartOne-Regular.ttf"},
+    {"id": "rocknroll",    "label": "ロックンロール（ポップ）",  "family": "RocknRoll One",    "category": "cute",   "bundled": True,  "file": "RocknRollOne-Regular.ttf"},
+    {"id": "stick",        "label": "ステッキ（すっきり手書き）", "family": "Stick",            "category": "cute",   "bundled": True,  "file": "Stick-Regular.ttf"},
+    {"id": "kaiseidecol",  "label": "解星デコール（レトロ飾り）", "family": "Kaisei Decol",     "category": "cute",   "bundled": True,  "file": "KaiseiDecol-Bold.ttf"},
+    {"id": "yujisyuku",    "label": "佑字肅（筆文字・和風）",    "family": "Yuji Syuku",       "category": "simple", "bundled": True,  "file": "YujiSyuku-Regular.ttf"},
+    {"id": "shippori",     "label": "しっぽり明朝（上品・和風）", "family": "Shippori Mincho B1", "category": "simple", "bundled": True, "file": "ShipporiMinchoB1-Bold.ttf"},
 ]
 _FONT_FAMILIES = {f["family"] for f in FONTS}
 
@@ -306,10 +314,10 @@ class Settings:
     # "" で無効（synth 時刻＝従来の均等割りに戻す）。small=日本語精度高・推奨, base=軽量/高速だが日本語弱い。
     kotoba_timing_donor: str = field(default_factory=lambda: _env("KOTOBA_TIMING_DONOR", "small"))
 
-    # クリップ条件（TikTok の最適尺）。max はオチまで収める余裕を持たせる
-    # （60だと _sanitize のクランプで「良い所の手前」で切れる事故があった）。
+    # クリップ条件（TikTok の最適尺）。max は「内容が本当に続く場合」の上限＝5分。
+    # （短すぎるクランプは「良い所の手前」で切れる事故になるため余裕を持たせる）
     clip_min_sec: float = 18.0
-    clip_max_sec: float = 90.0
+    clip_max_sec: float = 300.0
     default_clip_count: int = 5
 
     # 9:16 リフレーム方式: "crop"(中央クロップ=全画面) / "letterbox"(上下黒帯) / "blur"(背景ぼかし)

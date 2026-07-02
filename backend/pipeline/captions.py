@@ -695,6 +695,9 @@ def build_ass(
     box_color: str | None = None,
     box_pad: float | None = None,
     sub_offset: float | None = None,
+    shadow_depth: float | None = None,   # 影の濃さ（オフセットpx・0で影なし）
+    shadow_alpha: float | None = None,   # 影の不透明度 0-1（1=真っ黒）
+    shadow_blur: float | None = None,    # 文字エッジ+影のぼかし 0-12
 ) -> str:
     """ASS を生成。`telops` を渡せばそれを、無ければ `words` から自動分割して使う。
 
@@ -731,6 +734,15 @@ def build_ass(
     emph_size = int(cap_size * 1.5)
     laugh_size = int(cap_size * 1.25)
 
+    # 影の設定（編集UIスライダー）。深さ=Shadow フィールド、不透明度=BackColour のアルファ、
+    # ぼかし=\blur オーバーライド（文字エッジ・縁取り・影がソフトになる）。
+    cap_shad = _clamp(shadow_depth, 0, 24, cap.shadow)
+    ttl_shad = _clamp(shadow_depth, 0, 24, ttl.shadow)
+    sh_op = _clamp(shadow_alpha, 0.0, 1.0, (255 - 0x64) / 255)   # 既定=旧 &H64（約61%）
+    sh_col = f"&H{int(round((1.0 - sh_op) * 255)):02X}000000"
+    _blur = _clamp(shadow_blur, 0.0, 12.0, 0.0)
+    blur_ov = f"{{\\blur{_blur:g}}}" if _blur > 0 else ""
+
     # 枠（box）モード: BorderStyle=3（半透明の背景ボックス）。縁取りの代わりに枠を出す。
     # box_pad（Outline 値）で枠の余白＝大きさを調整（UIスライダー）。
     if box:
@@ -743,18 +755,18 @@ def build_ass(
 
     styles = [
         f"Style: Caption,{font_cap},{cap_size},"
-        f"{_ass_color(sub_c)},{_ass_color(sub_c)},{cap_outline_col},&H64000000,-1,0,0,0,"
-        f"100,100,0,0,{cap_border},{cap_pad},{cap.shadow},2,{margin_l},{margin_r},{caption_mv},1",
+        f"{_ass_color(sub_c)},{_ass_color(sub_c)},{cap_outline_col},{sh_col},-1,0,0,0,"
+        f"100,100,0,0,{cap_border},{cap_pad},{cap_shad:g},2,{margin_l},{margin_r},{caption_mv},1",
         # Emphasis: 盛り上がり/強調テロップを画面中央に大きく
         f"Style: Emphasis,{font_ttl},{emph_size},"
-        f"{_ass_color(emph_c)},{_ass_color(emph_c)},{_ass_color('#000000')},&H64000000,-1,0,0,0,"
-        f"100,100,0,0,1,{cap_out + 3},{cap.shadow},5,{margin_l},{margin_r},0,1",
+        f"{_ass_color(emph_c)},{_ass_color(emph_c)},{_ass_color('#000000')},{sh_col},-1,0,0,0,"
+        f"100,100,0,0,1,{cap_out + 3},{cap_shad:g},5,{margin_l},{margin_r},0,1",
         f"Style: Title,{font_ttl},{ttl_size},"
-        f"{_ass_color(ttl_c)},{_ass_color(ttl_c)},{_ass_color(ttl_out_c)},&H64000000,-1,0,0,0,"
-        f"100,100,0,0,1,{ttl_out},{ttl.shadow},8,{margin_l},{margin_r},{title_mv},1",
+        f"{_ass_color(ttl_c)},{_ass_color(ttl_c)},{_ass_color(ttl_out_c)},{sh_col},-1,0,0,0,"
+        f"100,100,0,0,1,{ttl_out},{ttl_shad:g},8,{margin_l},{margin_r},{title_mv},1",
         f"Style: Hook,{font_ttl},{hook_size},"
-        f"{_ass_color('#FFE600')},{_ass_color('#FFE600')},{_ass_color(ttl_out_c)},&H64000000,-1,0,0,0,"
-        f"100,100,0,0,1,{ttl_out + 2},{ttl.shadow},5,{margin_l},{margin_r},0,1",
+        f"{_ass_color('#FFE600')},{_ass_color('#FFE600')},{_ass_color(ttl_out_c)},{sh_col},-1,0,0,0,"
+        f"100,100,0,0,1,{ttl_out + 2},{ttl_shad:g},5,{margin_l},{margin_r},0,1",
         # Alert: Twitch 風バナー（背景ボックス BorderStyle=3）
         f"Style: Alert,{font_ttl},{alert_size},"
         f"{_ass_color('#FFFFFF')},{_ass_color('#FFFFFF')},{_ass_color('#25F4EE')},&H64000000,-1,0,0,0,"
@@ -797,9 +809,9 @@ def build_ass(
         if is_glow:
             events.append(_dialogue(start, end, style, lines,
                                     pos_anim_ov + _glow_group(color, fsize), layer=zlayer))
-            events.append(_dialogue(start, end, style, lines, pos_anim_ov, layer=zlayer))
+            events.append(_dialogue(start, end, style, lines, pos_anim_ov + blur_ov, layer=zlayer))
         else:
-            events.append(_dialogue(start, end, style, lines, pos_anim_ov + eff_ov, layer=zlayer))
+            events.append(_dialogue(start, end, style, lines, pos_anim_ov + eff_ov + blur_ov, layer=zlayer))
 
     # ウォーターマーク（@ハンドル等のテキスト）。装飾なし・最背面。
     if isinstance(watermark, dict) and str(watermark.get("text", "")).strip():
@@ -852,12 +864,12 @@ def build_ass(
         elif tstyle == "laugh":   # 笑い「ｗｗｗ」
             lines = _wrap_static(text, _max_chars(laugh_size), 1)
             if lines:
-                ov = _pos_tag(tp_pos or _LAUGH_POS) + (_ANIM_LAUGH if animate else "")
+                ov = _pos_tag(tp_pos or _LAUGH_POS) + (_ANIM_LAUGH if animate else "") + blur_ov
                 events.append(_dialogue(s, e, "Laugh", lines, ov, layer=zl))
         elif is_alert:   # アラートは glow/装飾を付けず単層（バナー様式）
             lines = _wrap_static(text, _max_chars(alert_size), cap.max_lines)
             if lines:
-                ov = _pos_tag(tp_pos or _ALERT_POS) + (_ANIM_ALERT if animate else "")
+                ov = _pos_tag(tp_pos or _ALERT_POS) + (_ANIM_ALERT if animate else "") + blur_ov
                 events.append(_dialogue(s, e, "Alert", lines, ov, layer=zl))
         elif is_emph:
             # 強調の既定は画面中央（プレビューと同じ (0.5, 0.5)）

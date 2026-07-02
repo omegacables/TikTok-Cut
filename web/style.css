@@ -573,3 +573,83 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 /* すべて保存バー（結果タブ上部） */
 .saveall-bar { display: flex; align-items: center; gap: 14px; margin-bottom: 14px; }
 .saveall-bar .dl-btn { margin-top: 0; width: auto; padding: 10px 20px; }
+
+/* ============================================================
+   v0.7.0 デザインリフレッシュ（モダンポリッシュレイヤー）
+   - 立体感のあるサーフェス／なめらかなトランジション
+   - フォーカスリング（キーボード操作の可視化）
+   - 触って気持ちいいボタン・スライダー・スクロールバー
+   ============================================================ */
+
+/* なめらかな状態遷移（操作系すべて） */
+button, .tab, select, input, textarea, .genre-chip, .mode-tab, .dl-btn, .mini-btn,
+.job-item, .clip-card, .dropzone, .sfx-chip, .ed-chip {
+  transition: background .16s ease, border-color .16s ease, color .16s ease,
+              box-shadow .18s ease, transform .1s ease, opacity .16s ease;
+}
+
+/* キーボードフォーカスの可視化（アクセシビリティ） */
+:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; border-radius: 6px; }
+:focus:not(:focus-visible) { outline: none; }
+
+/* カード: 柔らかい立体感＋上端ハイライト */
+.card {
+  border-radius: 16px;
+  background: linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,0) 60px), var(--surface);
+  box-shadow: 0 1px 0 rgba(255,255,255,.04) inset, 0 8px 28px rgba(0,0,0,.30);
+}
+
+/* タブ: アクティブにアクセントの下線グロー */
+.tab.active { box-shadow: 0 2px 0 var(--accent) inset; box-shadow: none; }
+.tab.active::after { content: ''; position: absolute; left: 14px; right: 14px; bottom: 0;
+  height: 3px; border-radius: 3px 3px 0 0;
+  background: linear-gradient(90deg, var(--accent), var(--accent-2)); }
+
+/* 主要ボタン: グラデーション＋ホバーで浮く */
+.start-btn, .ed-save, .bulk-apply {
+  background: linear-gradient(135deg, var(--accent), #ff5f3d) !important;
+  box-shadow: 0 4px 14px rgba(255,45,85,.28);
+}
+.start-btn:hover:not(:disabled), .ed-save:hover:not(:disabled), .bulk-apply:hover:not(:disabled) {
+  transform: translateY(-1px); box-shadow: 0 6px 20px rgba(255,45,85,.38);
+}
+.start-btn:active, .ed-save:active { transform: translateY(0); }
+.dl-btn:hover, .mini-btn:hover { border-color: var(--accent-2); transform: translateY(-1px); }
+
+/* 入力: ホバーで境界を明るく、フォーカスでリング */
+input[type=text]:hover, select:hover, textarea:hover { border-color: #3a3e4d; }
+input[type=text]:focus, select:focus, textarea:focus {
+  border-color: var(--accent-2); box-shadow: 0 0 0 3px rgba(37,244,238,.12);
+}
+
+/* スライダー: 触りやすい大きめサム */
+input[type=range] { height: 22px; }
+input[type=range]::-webkit-slider-runnable-track {
+  height: 5px; border-radius: 3px; background: var(--surface-2);
+  border: 1px solid var(--border);
+}
+input[type=range]::-webkit-slider-thumb {
+  -webkit-appearance: none; width: 16px; height: 16px; margin-top: -6.5px;
+  border-radius: 50%; background: var(--accent); border: 2px solid #fff2;
+  box-shadow: 0 1px 5px rgba(0,0,0,.5); cursor: grab;
+}
+input[type=range]:active::-webkit-slider-thumb { cursor: grabbing; transform: scale(1.15); }
+
+/* スクロールバー: 細く控えめに */
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: #333748; border-radius: 6px; border: 2px solid var(--bg); }
+::-webkit-scrollbar-thumb:hover { background: #454a5e; }
+
+/* クリップカード: ホバーで浮く＋アクセント境界 */
+.clip-card:hover { border-color: rgba(255,45,85,.45); transform: translateY(-2px);
+  box-shadow: 0 10px 30px rgba(0,0,0,.35); }
+
+/* ジャンルチップ: 選択時のグロー */
+.genre-chip.on { box-shadow: 0 0 0 1px var(--accent), 0 2px 10px rgba(255,45,85,.22); }
+
+/* プログレスバー: グラデーション＋シマー */
+.progress-fill { background: linear-gradient(90deg, var(--accent), var(--accent-2)) !important; }
+
+/* ドロップゾーン: ホバーで持ち上げ */
+.dropzone:hover { transform: translateY(-1px); box-shadow: 0 6px 18px rgba(0,0,0,.25); }

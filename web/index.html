@@ -276,15 +276,6 @@
           </select>
         </div>
         <div class="field small">
-          <label for="effectSelect">文字エフェクト <span class="opt">（装飾）</span></label>
-          <select id="effectSelect">
-            <option value="none" selected>なし</option>
-            <option value="glow">光彩（ふんわり発光）</option>
-            <option value="sparkle">キラキラ（粒子・近似）</option>
-            <option value="horror">ホラー（血色＋ゆれ）</option>
-          </select>
-        </div>
-        <div class="field small">
           <label>反応テロップ <span class="opt">（AIが字幕内容から自動付与）</span></label>
           <div style="display:flex;flex-direction:column;gap:8px;">
             <label class="switch" style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;font-size:.85rem;">
@@ -414,6 +405,8 @@
     <div id="clipGrid" class="clip-grid"></div>
   </main>
 
+  <script src="/static/tinysegmenter.js"></script>
+  <script src="/static/jawrap.js"></script>
   <script src="/static/app.js"></script>
 </body>
 </html>

@@ -217,7 +217,7 @@ async function startProcess() {
   fd.append('intro', document.getElementById('intro').value);
   const animV = document.getElementById('animSelect').value;
   fd.append('animation', animV);
-  fd.append('effect', document.getElementById('effectSelect').value);
+  fd.append('effect', _effSel());   // エフェクトUIは廃止（既定 none・後方互換で送信のみ）
   fd.append('animate', animV === 'none' ? '0' : '1');
   fd.append('tempo', document.getElementById('tempo').value);
   fd.append('font', document.getElementById('fontSelect').value || '');
@@ -617,7 +617,8 @@ function edRenderSelTelop(ed) {
     '<label>アニメ<select class="ed-t-anim">' + optionsHtml(TANIM_OPTS, tp.animation || '') + '</select></label>' +
     '<label>層<input class="ed-t-layer" type="number" min="0" max="9" value="' + (tp.layer || 0) + '"></label>' +
     '<label class="ed-flag"><input type="checkbox" class="ed-emph-cb"' + (tp.emphasis ? ' checked' : '') + '>強調</label>' +
-    '<label class="ed-flag"><input type="checkbox" class="ed-alert-cb"' + (tp.style === 'alert' ? ' checked' : '') + '>ｱﾗｰﾄ</label>';
+    '<label class="ed-flag"><input type="checkbox" class="ed-alert-cb"' + (tp.style === 'alert' ? ' checked' : '') + '>ｱﾗｰﾄ</label>' +
+    '<label class="ed-flag" title="チャット風の白ボックス＋アバターで表示"><input type="checkbox" class="ed-cmt-cb"' + (tp.style === 'comment' ? ' checked' : '') + '>💬ｺﾒﾝﾄ風</label>';
 }
 function edWireSelTelop(ed) {
   const panel = ed.querySelector('.ed-sel-tel'); if (!panel || panel.dataset.wired) return;
@@ -640,6 +641,7 @@ function edWireSelTelop(ed) {
     const tp = (ed._telops || [])[ed._selTelop]; if (!tp) return;
     if (e.target.classList.contains('ed-emph-cb')) { tp.emphasis = e.target.checked; renderPreviewTelops(ed); }
     else if (e.target.classList.contains('ed-alert-cb')) { tp.style = e.target.checked ? 'alert' : (tp.style === 'alert' ? '' : tp.style); renderPreviewTelops(ed); }
+    else if (e.target.classList.contains('ed-cmt-cb')) { tp.style = e.target.checked ? 'comment' : (tp.style === 'comment' ? '' : tp.style); renderPreviewTelops(ed); }
     else if (e.target.classList.contains('ed-t-anim')) { tp.animation = e.target.value; renderPreviewTelops(ed, true); }
   });
 }
@@ -1194,7 +1196,7 @@ function currentStyleObj() {
     font: v('fontSelect'), sub: v('cSub'), hi: v('cHi'), out: v('cOut'), title: v('cTitle'),
     capSize: +v('capSize'), capOutline: +v('capOutline'),
     titleSize: +v('titleSize'), titleOutline: +v('titleOutline'),
-    animation: v('animSelect'), effect: v('effectSelect'),
+    animation: v('animSelect'), effect: _effSel(),
     box: document.getElementById('boxOn').checked, boxColor: v('cBox'), boxPad: +v('boxPad'),
   };
 }
@@ -1441,6 +1443,9 @@ async function loadEditor(ed) {
     const ttlOl = st.title_outline_width != null ? st.title_outline_width : 8;
     const ttlW = Math.round((st.title_width || 0.66) * 100);   // タイトル折返し幅（%）
     const capW = Math.round((st.caption_width || 0.66) * 100); // 字幕折返し幅（%）
+    const shD = st.shadow_depth != null ? +st.shadow_depth : 2;                  // 影の濃さ（px）
+    const shA = Math.round((st.shadow_alpha != null ? +st.shadow_alpha : 0.61) * 100);  // 影の不透明度（%）
+    const shB = st.shadow_blur != null ? +st.shadow_blur : 0;                    // 影のぼかし
     const animV = st.animation || 'default';
     const effV = st.effect || 'none';
     // WYSIWYG プレビュー用に、クリップのフォント・色・枠を控える（再描画前の見た目確認）
@@ -1469,10 +1474,14 @@ async function loadEditor(ed) {
             '<input type="range" class="ed-ttlol" min="0" max="20" step="1" value="' + ttlOl + '"></label>' +
           '<label class="slider-item">タイトル幅 <b class="ed-ttlw-o">' + ttlW + '</b>%' +
             '<input type="range" class="ed-ttlw" min="35" max="95" step="1" value="' + ttlW + '"></label>' +
+          '<label class="slider-item">影の濃さ <b class="ed-shd-o">' + shD + '</b>' +
+            '<input type="range" class="ed-shd" min="0" max="16" step="1" value="' + shD + '"></label>' +
+          '<label class="slider-item">影の不透明度 <b class="ed-sha-o">' + shA + '</b>%' +
+            '<input type="range" class="ed-sha" min="0" max="100" step="5" value="' + shA + '"></label>' +
+          '<label class="slider-item">影のぼかし <b class="ed-shb-o">' + shB + '</b>' +
+            '<input type="range" class="ed-shb" min="0" max="10" step="0.5" value="' + shB + '"></label>' +
           '<label class="slider-item">アニメーション' +
             '<select class="ed-anim">' + optionsHtml(ANIM_OPTS, animV) + '</select></label>' +
-          '<label class="slider-item">エフェクト' +
-            '<select class="ed-effect">' + optionsHtml(EFFECT_OPTS, effV) + '</select></label>' +
           '<label class="slider-item">画面構成(9:16)' +
             '<select class="ed-reframe">' + optionsHtml([['crop', '中央クロップ'], ['blur', '背景ぼかし'], ['letterbox', 'レターボックス']], data.reframe || 'crop') + '</select></label>' +
           '<label class="slider-item ed-lb-field"' + ((data.reframe || 'crop') !== 'letterbox' ? ' style="display:none"' : '') + '>帯の色' +
@@ -1561,7 +1570,7 @@ function wireEditorPreview(ed) {
   const t = ed.querySelector('.ed-title');
   if (t) t.addEventListener('input', upd);
   ed.querySelectorAll('.ed-text').forEach(i => i.addEventListener('input', upd));
-  ['.ed-capsz', '.ed-capol', '.ed-ttlsz', '.ed-ttlol', '.ed-ttlw'].forEach(s => {
+  ['.ed-capsz', '.ed-capol', '.ed-ttlsz', '.ed-ttlol', '.ed-ttlw', '.ed-shd', '.ed-sha', '.ed-shb'].forEach(s => {
     const e = ed.querySelector(s); if (e) e.addEventListener('input', upd);
   });
   const eCapw = ed.querySelector('.ed-capw');
@@ -1614,9 +1623,14 @@ function _markSavedState(ed) {
   _syncTitleChipVis(ed);
 }
 
-// render(_wrap_static) と同様に文字数で折返す近似（プレビューの行数を実描画に合わせ位置一致）
+// 実描画(_wrap_static)と同一の日本語折返し（jawrap.js＝captions.py の忠実移植・差分テスト済み）
+// → プレビューの改行位置が焼き込みと完全一致する。
 function _pvWrap(text, maxChars, maxLines) {
-  // 手動改行（\n）は行構成として尊重（実描画の _wrap_static と同じ規則・最大4行）
+  if (window.jaWrapStatic) {
+    const lines = window.jaWrapStatic(text, maxChars, maxLines);
+    return lines.length ? lines : [''];
+  }
+  // フォールバック（jawrap.js 未読込時のみ・文字数詰め）
   const parts = String(text || '').split('\n').map(s => s.trim()).filter(Boolean);
   if (!parts.length) return [''];
   const limit = parts.length > 1 ? Math.max(maxLines, Math.min(4, parts.length)) : maxLines;
@@ -1654,6 +1668,7 @@ function updateEditorPreview(ed) {
   ct.style.fontSize = Math.max(7, ttlSz * sc) + 'px';
   ct.style.webkitTextStroke = Math.max(0, num('.ed-ttlol', 8) * sc).toFixed(1) + 'px ' + pv.titleOut;
   ct.style.background = 'transparent'; ct.style.padding = '0';
+  ct.style.textShadow = _pvShadow(ed, sc);
   // 折返し幅を破線の箱として可視化＝左右端ドラッグ（幅ハンドル）の手応えを見せる
   ct.style.width = (ttlW * 100) + '%';
   ct.style.maxWidth = 'none';
@@ -1666,6 +1681,17 @@ function updateEditorPreview(ed) {
 // 再生位置にアクティブな全テロップを、各テロップの位置・スタイルで表示（個別ドラッグ可）
 // replay=true でアニメを再生（アニメ変更時のみ。timeupdate では再生せずチラつき回避）
 // opts.frame/opts.telops/opts.noDrag で 字幕調整モーダル（#subFrame・_subDraft・ドラッグ無し）にも流用。
+// 影のCSS近似（ASSの Shadow=オフセット / BackColourα=不透明度 / \blur=ぼかし に対応）
+function _pvShadow(ed, sc) {
+  const g = s => { const e = ed.querySelector(s); return e ? +e.value : null; };
+  const d = g('.ed-shd') != null ? g('.ed-shd') : 2;
+  const a = (g('.ed-sha') != null ? g('.ed-sha') : 61) / 100;
+  const b = g('.ed-shb') != null ? g('.ed-shb') : 0;
+  if (d <= 0 && b <= 0) return 'none';
+  return (d * sc).toFixed(1) + 'px ' + (d * sc).toFixed(1) + 'px '
+    + (b * 2 * sc).toFixed(1) + 'px rgba(0,0,0,' + a.toFixed(2) + ')';
+}
+
 // テロップの内容キー（焼き込み済みかどうかの判定用。保存時点のスナップショットと比較）
 function _tpKey(tp) {
   return JSON.stringify([+tp.start, +tp.end, tp.text || '', tp.style || '', !!tp.emphasis,
@@ -1726,6 +1752,7 @@ function renderPreviewTelops(ed, replay, opts) {
     chip.innerHTML = _pvWrapHtml(tp.text, Math.max(4, Math.floor(1080 * wr / size)), 2);
     chip.style.color = color;
     chip.style.fontSize = Math.max(7, size * sc) + 'px';
+    if (tp.style !== 'comment') chip.style.textShadow = _pvShadow(ed, sc);
     if (plain && !pv.box) {   // 破線箱=折返し幅（左右端ドラッグで幅・右下グリップでサイズ）
       chip.style.width = (capW * 100) + '%';
       chip.style.maxWidth = 'none';
@@ -2137,6 +2164,7 @@ function initPosEditor(ed) {
   bind('.ed-capsz', '.ed-capsz-o'); bind('.ed-ttlsz', '.ed-ttlsz-o');
   bind('.ed-capol', '.ed-capol-o'); bind('.ed-ttlol', '.ed-ttlol-o');
   bind('.ed-ttlw', '.ed-ttlw-o'); bind('.ed-capw', '.ed-capw-o');
+  bind('.ed-shd', '.ed-shd-o'); bind('.ed-sha', '.ed-sha-o'); bind('.ed-shb', '.ed-shb-o');
 }
 
 function resetPos(btn) {
@@ -2167,6 +2195,9 @@ function _editorPayload(ed) {
   q('.ed-capol', 'outline_width'); q('.ed-ttlol', 'title_outline_width');
   const tw = ed.querySelector('.ed-ttlw'); if (tw) style.title_width = (+tw.value || 66) / 100;   // タイトル幅（%→比率）
   const cw = ed.querySelector('.ed-capw'); if (cw) style.caption_width = (+cw.value || 66) / 100; // 字幕幅（%→比率）
+  const sd = ed.querySelector('.ed-shd'); if (sd) style.shadow_depth = +sd.value;                 // 影の濃さ
+  const sa = ed.querySelector('.ed-sha'); if (sa) style.shadow_alpha = (+sa.value) / 100;         // 影の不透明度
+  const sb = ed.querySelector('.ed-shb'); if (sb) style.shadow_blur = +sb.value;                  // 影のぼかし
   const qs = (sel, key) => { const e = ed.querySelector(sel); if (e) style[key] = e.value; };
   qs('.ed-anim', 'animation'); qs('.ed-effect', 'effect');
   const num = sel => { const e = ed.querySelector(sel); return e ? (+e.value || 0) : 0; };
