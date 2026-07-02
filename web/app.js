@@ -1440,7 +1440,7 @@ async function loadEditor(ed) {
           '<label class="slider-item">タイトルの縁取り <b class="ed-ttlol-o">' + ttlOl + '</b>' +
             '<input type="range" class="ed-ttlol" min="0" max="20" step="1" value="' + ttlOl + '"></label>' +
           '<label class="slider-item">タイトル幅 <b class="ed-ttlw-o">' + ttlW + '</b>%' +
-            '<input type="range" class="ed-ttlw" min="35" max="95" step="5" value="' + ttlW + '"></label>' +
+            '<input type="range" class="ed-ttlw" min="35" max="95" step="1" value="' + ttlW + '"></label>' +
           '<label class="slider-item">アニメーション' +
             '<select class="ed-anim">' + optionsHtml(ANIM_OPTS, animV) + '</select></label>' +
           '<label class="slider-item">エフェクト' +
@@ -1492,7 +1492,7 @@ async function loadEditor(ed) {
     // 毎回オーバーレイを作り直してタイトルチップを入れ直す（リスナー重複・前クリップ残りを防ぐ）。
     ed._frame = document.getElementById('detailPvFrame');
     if (ed._frame) {
-      ed._frame.innerHTML = '<div class="ed-chip ed-wys ed-ct" style="left:' + (tp0.x * 100) + '%;top:' + (tp0.y * 100) + '%"></div>';
+      ed._frame.innerHTML = '<div class="ed-chip ed-wys ed-ct" title="ドラッグ=移動／右下グリップ=大きさ／左右端=幅" style="left:' + (tp0.x * 100) + '%;top:' + (tp0.y * 100) + '%"></div>';
     }
     // 現在の描画済み状態を「焼き込み済み」として記録（再生中の二重表示防止の基準）
     ed._title0 = { t: (data.title || '').trim(), sz: ttlSz, w: ttlW, x: tp0.x, y: tp0.y };
@@ -1624,6 +1624,9 @@ function updateEditorPreview(ed) {
   ct.style.fontSize = Math.max(7, ttlSz * sc) + 'px';
   ct.style.webkitTextStroke = Math.max(0, num('.ed-ttlol', 8) * sc).toFixed(1) + 'px ' + pv.titleOut;
   ct.style.background = 'transparent'; ct.style.padding = '0';
+  // 折返し幅を破線の箱として可視化＝左右端ドラッグ（幅ハンドル）の手応えを見せる
+  ct.style.width = (ttlW * 100) + '%';
+  ct.style.textAlign = 'center';
   _syncTitleChipVis(ed);   // 再生中でもタイトルを編集したら即チップを出す
   renderPreviewTelops(ed);   // 再生位置にアクティブな全テロップを実スタイルで表示
   applyEditorFx(ed);
@@ -1972,7 +1975,7 @@ function initPosEditor(ed) {
   if (!frame) return;
   frame.querySelectorAll('.ed-chip').forEach(chip => {
     const isTitle = chip.classList.contains('ed-ct');
-    let dragging = false, resizing = false, rz = null;
+    let dragging = false, resizing = false, widthing = false, rz = null;
     const move = (cx, cy) => {
       const r = frame.getBoundingClientRect();
       const x = Math.max(0.03, Math.min(0.97, (cx - r.left) / r.width));
@@ -1980,6 +1983,18 @@ function initPosEditor(ed) {
       chip.style.left = (x * 100) + '%'; chip.style.top = (y * 100) + '%';
       const pos = { x: +x.toFixed(3), y: +y.toFixed(3) };
       if (isTitle) ed._titlePos = pos; else ed._capPos = pos;
+    };
+    // タイトルの左右端をドラッグ＝折返し幅（タイトル幅スライダー）を直接調整
+    const widthResize = (cx) => {
+      const fr = frame.getBoundingClientRect();
+      const centerX = fr.left + (((ed._titlePos || {}).x != null ? ed._titlePos.x : 0.5) * fr.width);
+      const ratio = Math.max(0.35, Math.min(0.95, (Math.abs(cx - centerX) * 2) / fr.width));
+      const wInp = ed.querySelector('.ed-ttlw'); if (!wInp) return;
+      const pct = Math.round(ratio * 100);
+      if (+wInp.value === pct) return;
+      wInp.value = pct;
+      const wo = ed.querySelector('.ed-ttlw-o'); if (wo) wo.textContent = pct;
+      updateEditorPreview(ed);
     };
     // タイトルは端(右下グリップ)を掴むと拡縮＝文字サイズ＋縁取りを連動更新
     const resize = (cx, cy) => {
@@ -2000,8 +2015,11 @@ function initPosEditor(ed) {
     chip.addEventListener('pointerdown', e => {
       const r = chip.getBoundingClientRect();
       const inGrip = (e.clientX > r.right - 20 && e.clientY > r.bottom - 20);
+      const onSide = isTitle && !inGrip
+        && (e.clientX < r.left + 14 || e.clientX > r.right - 14);   // 左右端＝幅ハンドル
       try { chip.setPointerCapture(e.pointerId); } catch (_) {}
       e.preventDefault();
+      if (onSide) { widthing = true; return; }
       if (inGrip) {
         resizing = true;
         rz = {
@@ -2014,9 +2032,10 @@ function initPosEditor(ed) {
     });
     chip.addEventListener('pointermove', e => {
       if (resizing) resize(e.clientX, e.clientY);
+      else if (widthing) widthResize(e.clientX);
       else if (dragging) move(e.clientX, e.clientY);
     });
-    const up = e => { dragging = false; resizing = false; try { chip.releasePointerCapture(e.pointerId); } catch (_) {} };
+    const up = e => { dragging = false; resizing = false; widthing = false; try { chip.releasePointerCapture(e.pointerId); } catch (_) {} };
     chip.addEventListener('pointerup', up);
     chip.addEventListener('pointercancel', up);
   });

@@ -338,6 +338,12 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 /* プレビューのレターボックス帯（近似・色確認用） */
 .ed-lb-band { position: absolute; left: 0; width: 100%; height: 32%; z-index: 1; pointer-events: none; }
 .ed-lb-top { top: 0; } .ed-lb-bot { bottom: 0; }
+/* チップ（タイトル/テロップ）は帯より上（実描画でも字幕は帯の上に焼かれる）。テロップはinlineで10+。 */
+.ed-frame .ed-chip { z-index: 5; }
+/* タイトルチップの左端＝幅変更ハンドル（ドラッグで「タイトル幅」を直接調整） */
+.ed-chip.ed-ct::before { content: ''; position: absolute; left: -5px; top: 50%;
+  transform: translateY(-50%); width: 8px; height: 22px; border-radius: 4px;
+  background: rgba(255,255,255,.75); border: 1px solid rgba(0,0,0,.35); cursor: ew-resize; }
 .ed-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .ed-save { padding: 9px 14px; background: var(--accent); color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: .85rem; }
 .ed-save:hover { filter: brightness(1.08); }
