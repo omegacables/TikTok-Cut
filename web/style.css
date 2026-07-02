@@ -537,8 +537,7 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .job-meta { color: var(--muted); font-size: .8rem; margin-top: 3px; }
 .job-item .dl-btn { flex-shrink: 0; width: auto; padding: 8px 18px; }
 
-/* ===== 再生中は編集オーバーレイを隠す（焼き込み字幕との二重表示防止） ===== */
-.ed-frame.pv-playing .ed-chip { display: none !important; }
+/* （再生中のオーバーレイ制御は JS 側で「未保存の変更だけ表示」に変更・v0.6.2） */
 
 /* ===== 編集ページの文字サイズ拡大（視認性向上・v0.6.1） ===== */
 #tab-detail .slider-item { font-size: .92rem; }

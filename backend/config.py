@@ -294,9 +294,10 @@ class Settings:
     whisper_model: str = field(default_factory=lambda: _env("WHISPER_MODEL", ""))
     whisper_device: str = field(default_factory=lambda: _env("WHISPER_DEVICE", "auto"))
     whisper_language: str = field(default_factory=lambda: _env("WHISPER_LANGUAGE"))
-    # GPUバッチ推論で文字起こしを高速化（WHISPER_BATCHED=0 で無効）。バッチは幻聴抑制ノブの一部が
-    # 無効化されるため、品質最優先なら 0。batch_size は 8GB VRAM 安全値の 8、beam は精度の 5。
-    whisper_batched: bool = field(default_factory=lambda: _env("WHISPER_BATCHED", "1") != "0")
+    # GPUバッチ推論で文字起こしを高速化（WHISPER_BATCHED=1 で有効）。バッチは幻聴抑制ノブの一部
+    # （condition_on_previous_text 等）が無効化されるため、既定は品質優先の逐次実行=0。
+    # 速度を優先したい場合のみ環境変数 WHISPER_BATCHED=1 で戻せる。
+    whisper_batched: bool = field(default_factory=lambda: _env("WHISPER_BATCHED", "0") != "0")
     whisper_batch_size: int = field(default_factory=lambda: _env_int("WHISPER_BATCH_SIZE", 8))
     whisper_beam_size: int = field(default_factory=lambda: _env_int("WHISPER_BEAM_SIZE", 5))
 

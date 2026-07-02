@@ -684,6 +684,7 @@ def build_ass(
     effect: str | None = None,
     caption_size: float | None = None,
     title_size: float | None = None,
+    title_width: float | None = None,     # タイトルの折返し幅（0.35〜0.95・既定 _WIDTH_RATIO）
     outline_width: float | None = None,
     title_outline_width: float | None = None,
     caption_pos: dict | None = None,
@@ -805,9 +806,21 @@ def build_ass(
         events.append(_dialogue(0.0, clip_duration, "Watermark",
                                 [str(watermark["text"]).strip()],
                                 f"{{\\an{an}\\pos({wx},{wy})}}"))
+    # ── 位置の既定値（編集プレビューの中央アンカーチップと完全一致させる）──
+    # 旧実装は位置未指定時にスタイルの Alignment(上端/下端アンカー)+Margin で配置しており、
+    # プレビュー（中央アンカー）と半ブロック分ズレていた。常に \an5\pos で焼く。
+    eff_title_pos = title_pos or {"x": 0.5, "y": ttl.pos_y}
+    eff_caption_pos = caption_pos or {"x": 0.5, "y": cap.pos_y}
+    _ALERT_POS = {"x": 0.5, "y": 0.33}
+    _LAUGH_POS = {"x": 0.78, "y": 0.45}
+
+    # タイトルの折返し幅（title_width=0.35〜0.95・既定は _WIDTH_RATIO）。編集UIの「タイトル幅」。
+    ttl_ratio = _clamp(title_width, 0.35, 0.95, _WIDTH_RATIO)
+    ttl_chars = max(4, int(OUTPUT_W * ttl_ratio / max(1, ttl_size)))
+
     if title.strip():
-        emit(0.0, clip_duration, "Title", _wrap_static(title, _max_chars(ttl_size), 2),
-             _pos_tag(title_pos) + _anim_group(animation, "title", animate), ttl_c, ttl_size)
+        emit(0.0, clip_duration, "Title", _wrap_static(title, ttl_chars, 2),
+             _pos_tag(eff_title_pos) + _anim_group(animation, "title", animate), ttl_c, ttl_size)
     if hook.strip():
         emit(0.0, min(2.2, clip_duration), "Hook", _wrap_static(hook, _max_chars(hook_size), 2),
              _anim_group(animation, "hook", animate), "#FFE600", hook_size)
@@ -836,20 +849,21 @@ def build_ass(
         elif tstyle == "laugh":   # 笑い「ｗｗｗ」
             lines = _wrap_static(text, _max_chars(laugh_size), 1)
             if lines:
-                ov = (_pos_tag(tp_pos) if tp_pos else "") + (_ANIM_LAUGH if animate else "")
+                ov = _pos_tag(tp_pos or _LAUGH_POS) + (_ANIM_LAUGH if animate else "")
                 events.append(_dialogue(s, e, "Laugh", lines, ov, layer=zl))
         elif is_alert:   # アラートは glow/装飾を付けず単層（バナー様式）
             lines = _wrap_static(text, _max_chars(alert_size), cap.max_lines)
             if lines:
-                ov = (_pos_tag(tp_pos) if tp_pos else "") + (_ANIM_ALERT if animate else "")
+                ov = _pos_tag(tp_pos or _ALERT_POS) + (_ANIM_ALERT if animate else "")
                 events.append(_dialogue(s, e, "Alert", lines, ov, layer=zl))
         elif is_emph:
-            ov = (_pos_tag(tp_pos) if tp_pos else "") + _ANIM_EMPH
+            # 強調の既定は画面中央（プレビューと同じ (0.5, 0.5)）
+            ov = _pos_tag(tp_pos or {"x": 0.5, "y": 0.5}) + _ANIM_EMPH
             emit(s, e, "Emphasis", _wrap_static(text, _max_chars(emph_size), cap.max_lines),
                  ov, emph_c, emph_size, zlayer=zl)
         else:   # テロップ個別の position/animation があればクリップ既定を上書き
             emit(s, e, "Caption", _wrap_static(text, _max_chars(cap_size), cap.max_lines),
-                 _pos_tag(tp_pos or caption_pos) + _anim_group(tp.get("animation") or animation, "caption", animate),
+                 _pos_tag(tp_pos or eff_caption_pos) + _anim_group(tp.get("animation") or animation, "caption", animate),
                  sub_c, cap_size, zlayer=zl)
 
     if (effect or "").lower() == "sparkle":

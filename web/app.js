@@ -246,7 +246,8 @@ async function startProcess() {
   fd.append('logo', document.getElementById('logoOn').checked ? '1' : '0');
   fd.append('logo_pos', document.getElementById('logoPos').value);
   fd.append('laugh', document.getElementById('laughOn').checked ? '1' : '0');
-  fd.append('comment', document.getElementById('commentOn').checked ? '1' : '0');
+  // コメント読み上げのチャット風化は廃止（読み上げソフトの合成音声はWhisperで安定認識できないため）
+  fd.append('comment', '0');
   if (selectedPath) fd.append('video_path', selectedPath);
   else fd.append('video', selectedFile);
 
@@ -1318,6 +1319,7 @@ async function saveDetail(btn) {
     const gc = _bustGridCard(job, cid);
     if (gc) gc.querySelector('.clip-title').textContent = cid + '. ' + (newTitle || '無題');
     st.textContent = data.warning ? ('✓ 保存（' + data.warning + '）') : '✓ 保存しました';
+    _markSavedState(ed);   // 現在の編集内容＝焼き込み済み（再生中の二重表示防止の基準を更新）
     if (reload) { ed.dataset.loaded = ''; loadEditor(ed); }   // 延長/追加指示でテロップが変わる
   } catch (e) {
     _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰（ディスクは未変更）
@@ -1412,6 +1414,7 @@ async function loadEditor(ed) {
     const capSz = st.caption_size || 74, ttlSz = st.title_size || 80;
     const capOl = st.outline_width != null ? st.outline_width : 6;
     const ttlOl = st.title_outline_width != null ? st.title_outline_width : 8;
+    const ttlW = Math.round((st.title_width || 0.66) * 100);   // タイトル折返し幅（%）
     const animV = st.animation || 'default';
     const effV = st.effect || 'none';
     // WYSIWYG プレビュー用に、クリップのフォント・色・枠を控える（再描画前の見た目確認）
@@ -1436,6 +1439,8 @@ async function loadEditor(ed) {
             '<input type="range" class="ed-ttlsz" min="50" max="140" step="2" value="' + ttlSz + '"></label>' +
           '<label class="slider-item">タイトルの縁取り <b class="ed-ttlol-o">' + ttlOl + '</b>' +
             '<input type="range" class="ed-ttlol" min="0" max="20" step="1" value="' + ttlOl + '"></label>' +
+          '<label class="slider-item">タイトル幅 <b class="ed-ttlw-o">' + ttlW + '</b>%' +
+            '<input type="range" class="ed-ttlw" min="35" max="95" step="5" value="' + ttlW + '"></label>' +
           '<label class="slider-item">アニメーション' +
             '<select class="ed-anim">' + optionsHtml(ANIM_OPTS, animV) + '</select></label>' +
           '<label class="slider-item">エフェクト' +
@@ -1486,10 +1491,11 @@ async function loadEditor(ed) {
     // プレビューは左の動画上のオーバーレイに描画＝編集中の字幕が「再生される動画」にそのまま乗る。
     // 毎回オーバーレイを作り直してタイトルチップを入れ直す（リスナー重複・前クリップ残りを防ぐ）。
     ed._frame = document.getElementById('detailPvFrame');
-    if (ed._frame) ed._frame.classList.remove('pv-playing');   // クリップ切替時にリセット
     if (ed._frame) {
       ed._frame.innerHTML = '<div class="ed-chip ed-wys ed-ct" style="left:' + (tp0.x * 100) + '%;top:' + (tp0.y * 100) + '%"></div>';
     }
+    // 現在の描画済み状態を「焼き込み済み」として記録（再生中の二重表示防止の基準）
+    ed._title0 = { t: (data.title || '').trim(), sz: ttlSz, w: ttlW, x: tp0.x, y: tp0.y };
     initPosEditor(ed);
     wireEditorPreview(ed);
     wireReframe(ed);
@@ -1527,7 +1533,7 @@ function wireEditorPreview(ed) {
   const t = ed.querySelector('.ed-title');
   if (t) t.addEventListener('input', upd);
   ed.querySelectorAll('.ed-text').forEach(i => i.addEventListener('input', upd));
-  ['.ed-capsz', '.ed-capol', '.ed-ttlsz', '.ed-ttlol'].forEach(s => {
+  ['.ed-capsz', '.ed-capol', '.ed-ttlsz', '.ed-ttlol', '.ed-ttlw'].forEach(s => {
     const e = ed.querySelector(s); if (e) e.addEventListener('input', upd);
   });
   const eAnim = ed.querySelector('.ed-anim');
@@ -1535,23 +1541,47 @@ function wireEditorPreview(ed) {
   const eEff = ed.querySelector('.ed-effect');
   if (eEff) eEff.addEventListener('change', upd);
   // 動画の再生位置に同期してプレビューのテロップを更新（全変更を反映）。
-  // 再生中は動画自体に字幕が焼き込まれているため、編集用オーバーレイを隠して
-  // 二重表示（見づらさ）を防ぐ。停止中だけ編集チップを重ねる。
+  // 再生中: 焼き込み済みテロップは動画側に任せ、未保存の変更だけチップで重ねる
+  // （renderPreviewTelops 内で判定）。タイトルチップも未変更なら再生中は隠す。
   const v = _clipVideo(ed);
   if (v && !v._edPreviewWired) {
     v._edPreviewWired = true;
     const _re = () => { const e = document.getElementById('detailEditor'); if (e && e.dataset.loaded) renderPreviewTelops(e); };
     v.addEventListener('timeupdate', _re);
     v.addEventListener('seeking', _re);
-    v.addEventListener('play', () => {
-      const f = _edFrame(ed); if (f) f.classList.add('pv-playing');
-      _re();
-    });
-    v.addEventListener('pause', () => {
-      const f = _edFrame(ed); if (f) f.classList.remove('pv-playing');
-      _re();
-    });
+    v.addEventListener('play', () => { _syncTitleChipVis(ed); _re(); });
+    v.addEventListener('pause', () => { _syncTitleChipVis(ed); _re(); });
   }
+}
+
+// ===== タイトルチップの再生中表示制御＋保存済み状態の管理 =====
+// タイトルが「動画に焼き込み済みの状態」から変更されているか
+function _titleDirty(ed) {
+  const t0 = ed._title0 || {};
+  const cur = ((ed.querySelector('.ed-title') || {}).value || '').trim();
+  const sz = +((ed.querySelector('.ed-ttlsz') || {}).value) || 0;
+  const w = +((ed.querySelector('.ed-ttlw') || {}).value) || 0;
+  const p = ed._titlePos || {};
+  return cur !== (t0.t || '') || sz !== (t0.sz || 0) || w !== (t0.w || 0)
+    || Math.abs((p.x || 0) - (t0.x || 0)) > 0.001 || Math.abs((p.y || 0) - (t0.y || 0)) > 0.001;
+}
+// 再生中かつタイトル未変更 → チップを隠す（焼き込み済みの本物が見えるので二重にしない）
+function _syncTitleChipVis(ed) {
+  const f = _edFrame(ed); const ct = f && f.querySelector('.ed-ct'); if (!ct) return;
+  const v = _clipVideo(ed);
+  const playing = v && !v.paused && !v.ended;
+  ct.style.display = (playing && !_titleDirty(ed)) ? 'none' : '';
+}
+// 保存成功後: 現在の編集状態を「焼き込み済み」として記録（以後、再生中は同一内容のチップを隠す）
+function _markSavedState(ed) {
+  ed._telopsPristine = _subClone(ed._telops || []);
+  ed._title0 = {
+    t: ((ed.querySelector('.ed-title') || {}).value || '').trim(),
+    sz: +((ed.querySelector('.ed-ttlsz') || {}).value) || 0,
+    w: +((ed.querySelector('.ed-ttlw') || {}).value) || 0,
+    x: (ed._titlePos || {}).x || 0.5, y: (ed._titlePos || {}).y || 0.16,
+  };
+  _syncTitleChipVis(ed);
 }
 
 // render(_wrap_static) と同様に文字数で折返す近似（プレビューの行数を実描画に合わせ位置一致）
@@ -1587,12 +1617,14 @@ function updateEditorPreview(ed) {
   const titleTxt = ((ed.querySelector('.ed-title') || {}).value || '').trim() || 'タイトル';
   // タイトル（実描画と同じ文字数で折返し＝行数一致で位置一致）
   const ttlSz = num('.ed-ttlsz', 80);
-  ct.innerHTML = _pvWrapHtml(titleTxt, Math.max(6, Math.floor(1080 * 0.66 / ttlSz)), 2);   // 0.66=実描画の_WIDTH_RATIOと一致（行数一致→位置一致）
+  const ttlW = num('.ed-ttlw', 66) / 100;   // タイトル幅（実描画の title_width と一致→行数一致→位置一致）
+  ct.innerHTML = _pvWrapHtml(titleTxt, Math.max(4, Math.floor(1080 * ttlW / ttlSz)), 2);
   ct.style.fontFamily = ff;
   ct.style.color = pv.title;
   ct.style.fontSize = Math.max(7, ttlSz * sc) + 'px';
   ct.style.webkitTextStroke = Math.max(0, num('.ed-ttlol', 8) * sc).toFixed(1) + 'px ' + pv.titleOut;
   ct.style.background = 'transparent'; ct.style.padding = '0';
+  _syncTitleChipVis(ed);   // 再生中でもタイトルを編集したら即チップを出す
   renderPreviewTelops(ed);   // 再生位置にアクティブな全テロップを実スタイルで表示
   applyEditorFx(ed);
 }
@@ -1600,17 +1632,24 @@ function updateEditorPreview(ed) {
 // 再生位置にアクティブな全テロップを、各テロップの位置・スタイルで表示（個別ドラッグ可）
 // replay=true でアニメを再生（アニメ変更時のみ。timeupdate では再生せずチラつき回避）
 // opts.frame/opts.telops/opts.noDrag で 字幕調整モーダル（#subFrame・_subDraft・ドラッグ無し）にも流用。
+// テロップの内容キー（焼き込み済みかどうかの判定用。保存時点のスナップショットと比較）
+function _tpKey(tp) {
+  return JSON.stringify([+tp.start, +tp.end, tp.text || '', tp.style || '', !!tp.emphasis,
+    tp.animation || '', +(tp.layer || 0),
+    (tp.pos && tp.pos.x != null) ? [+(+tp.pos.x).toFixed(3), +(+tp.pos.y).toFixed(3)] : null]);
+}
+
 function renderPreviewTelops(ed, replay, opts) {
   opts = opts || {};
   const frame = opts.frame || _edFrame(ed);
   if (!frame) return;
-  // 再生中は動画の焼き込み字幕が本物のプレビュー。編集チップを重ねると二重表示で
-  // 見づらいため、停止中のみチップを描く（モーダル(opts.frame)や強制時は除外）。
+  // 再生中: 動画に焼き込み済みのテロップは隠し（二重表示防止）、
+  // まだ保存していない変更（追加・編集・移動）だけをチップで重ねて見せる。
+  let burnedKeys = null;
   if (!opts.frame && !opts.force) {
     const vp = _clipVideo(ed);
     if (vp && !vp.paused && !vp.ended) {
-      frame.querySelectorAll('.ed-tel-chip').forEach(n => n.remove());
-      return;
+      burnedKeys = new Set((ed._telopsPristine || []).map(_tpKey));
     }
   }
   const telops = opts.telops || ed._telops || [];
@@ -1629,7 +1668,13 @@ function renderPreviewTelops(ed, replay, opts) {
   telops.forEach((tp, ti) => {
     if (!tp.text || !tp.text.trim()) return;
     if (!(tp.start + soff <= t + 0.02 && t < tp.end + soff)) return;   // アクティブなテロップのみ（offset反映）
-    const pos = tp.pos || def;
+    if (burnedKeys && burnedKeys.has(_tpKey(tp))) return;   // 再生中: 焼き込み済みは動画側に任せる
+    // 位置の既定値は実描画（build_ass）の既定と一致させる（強調=中央/アラート=上部バナー/笑い=右中段）
+    const pos = tp.pos || (tp.emphasis ? { x: 0.5, y: 0.5 }
+      : tp.style === 'alert' ? { x: 0.5, y: 0.33 }
+      : tp.style === 'laugh' ? { x: 0.78, y: 0.45 }
+      : tp.style === 'comment' ? { x: 0.5, y: 0.55 }
+      : def);
     const chip = document.createElement('div');
     chip.className = 'ed-chip ed-wys ed-tel-chip';
     chip.dataset.ti = ti;
@@ -1981,6 +2026,7 @@ function initPosEditor(ed) {
   };
   bind('.ed-capsz', '.ed-capsz-o'); bind('.ed-ttlsz', '.ed-ttlsz-o');
   bind('.ed-capol', '.ed-capol-o'); bind('.ed-ttlol', '.ed-ttlol-o');
+  bind('.ed-ttlw', '.ed-ttlw-o');
 }
 
 function resetPos(btn) {
@@ -2009,6 +2055,7 @@ function _editorPayload(ed) {
   const q = (sel, key) => { const e = ed.querySelector(sel); if (e) style[key] = +e.value; };
   q('.ed-capsz', 'caption_size'); q('.ed-ttlsz', 'title_size');
   q('.ed-capol', 'outline_width'); q('.ed-ttlol', 'title_outline_width');
+  const tw = ed.querySelector('.ed-ttlw'); if (tw) style.title_width = (+tw.value || 66) / 100;   // タイトル幅（%→比率）
   const qs = (sel, key) => { const e = ed.querySelector(sel); if (e) style[key] = e.value; };
   qs('.ed-anim', 'animation'); qs('.ed-effect', 'effect');
   const num = sel => { const e = ed.querySelector(sel); return e ? (+e.value || 0) : 0; };
@@ -2053,6 +2100,7 @@ async function saveClip(btn) {
       if (gc) gc.querySelector('.clip-title').textContent = cid + '. ' + (newTitle || '無題');
     }
     st.textContent = data.warning ? ('✓ 更新（' + data.warning + '）') : '✓ 更新しました';
+    _markSavedState(ed);   // 現在の編集内容＝焼き込み済み（再生中の二重表示防止の基準を更新）
     if (reload) { ed.dataset.loaded = ''; loadEditor(ed); }
   } catch (e) {
     _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰
