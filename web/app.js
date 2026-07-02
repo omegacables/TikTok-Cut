@@ -52,16 +52,25 @@ async function loadPrefs() {
   if (!_prefs.palette) { const v = lsGet('tkc_palette'); if (v) _prefs.palette = v; }
   if (!_prefs.laststyle) { const v = lsGet('tkc_laststyle'); if (v) _prefs.laststyle = v; }
 }
-function savePrefs() {
+function savePrefs(immediate) {
   try { localStorage.setItem('tkc_prefs', JSON.stringify(_prefs)); } catch (_) {}
   if (_prefsTimer) clearTimeout(_prefsTimer);
-  _prefsTimer = setTimeout(() => {
-    fetch('/api/prefs', {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(_prefs),
-    }).catch(() => {});
-  }, 400);
+  const send = () => fetch('/api/prefs', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(_prefs),
+  }).catch(() => {});
+  if (immediate) send();               // プリセット保存等は即時（アプリ終了で消えない）
+  else _prefsTimer = setTimeout(send, 400);
 }
+// アプリ終了間際の未送信分を keepalive 付きで確実に送る
+window.addEventListener('beforeunload', () => {
+  if (!_prefsTimer) return;
+  clearTimeout(_prefsTimer); _prefsTimer = null;
+  try {
+    fetch(apiUrl('/api/prefs'), { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(_prefs), keepalive: true }).catch(() => {});
+  } catch (_) {}
+});
 
 // ===== ライセンス認証（初回起動時。Electron版のみ・オフライン検証） =====
 async function initLicense() {
@@ -238,6 +247,9 @@ async function startProcess() {
   fd.append('title_size', document.getElementById('titleSize').value);
   fd.append('outline_width', document.getElementById('capOutline').value);
   fd.append('title_outline_width', document.getElementById('titleOutline').value);
+  fd.append('shadow_depth', document.getElementById('shadowD').value);
+  fd.append('shadow_alpha', String((+document.getElementById('shadowA').value || 0) / 100));
+  fd.append('shadow_blur', document.getElementById('shadowB').value);
   fd.append('box', document.getElementById('boxOn').checked ? '1' : '0');
   fd.append('box_color', document.getElementById('cBox').value);
   fd.append('box_pad', document.getElementById('boxPad').value);
@@ -1163,7 +1175,8 @@ function closeInfo() { document.getElementById('infoModal').hidden = true; }
 // ===== サイズ・縁取りスライダー =====
 const SLIDER_OUT = [['capSize', 'capSizeOut'], ['capOutline', 'capOutOut'],
                     ['titleSize', 'titleSizeOut'], ['titleOutline', 'titleOutOut'],
-                    ['boxPad', 'boxPadOut']];
+                    ['boxPad', 'boxPadOut'],
+                    ['shadowD', 'shadowDOut'], ['shadowA', 'shadowAOut'], ['shadowB', 'shadowBOut']];
 function syncSliderLabels() {
   SLIDER_OUT.forEach(([i, o]) => {
     const el = document.getElementById(o), inp = document.getElementById(i);
@@ -1180,7 +1193,17 @@ function initSliders() {
 
 // ===== 字幕プリセット（localStorage） =====
 function loadPresets() { return _prefs.presets || []; }
-function savePresets(p) { _prefs.presets = p; savePrefs(); }
+function savePresets(p) { _prefs.presets = p; savePrefs(true); }   // プリセットは即時保存（確実性優先）
+
+// プリセットが空のとき、サーバから再取得してから一覧を作り直す（起動直後の取りこぼし対策）
+async function ensurePresetsLoaded() {
+  if (loadPresets().length) return;
+  try {
+    const p = await (await fetch('/api/prefs')).json();
+    if (p && typeof p === 'object') _prefs = Object.assign(_prefs, p);
+    refreshPresetSelect();
+  } catch (_) { /* サーバ未応答時は現状維持 */ }
+}
 function refreshPresetSelect() {
   const sel = document.getElementById('presetSelect');
   const cur = sel.value;
@@ -1198,6 +1221,7 @@ function currentStyleObj() {
     titleSize: +v('titleSize'), titleOutline: +v('titleOutline'),
     animation: v('animSelect'), effect: _effSel(),
     box: document.getElementById('boxOn').checked, boxColor: v('cBox'), boxPad: +v('boxPad'),
+    shadowD: +v('shadowD'), shadowA: +v('shadowA'), shadowB: +v('shadowB'),
   };
 }
 function applyStyleObj(s) {
@@ -1210,14 +1234,20 @@ function applyStyleObj(s) {
   if (s.boxPad != null) set('boxPad', s.boxPad);
   // アニメ/エフェクト（旧プリセットは animate:boolean のみ → 既定/なしに読み替え）
   set('animSelect', s.animation != null ? s.animation : (s.animate === false ? 'none' : 'default'));
-  set('effectSelect', s.effect != null ? s.effect : 'none');
+  set('shadowD', s.shadowD); set('shadowA', s.shadowA); set('shadowB', s.shadowB);
   if (typeof s.box === 'boolean') document.getElementById('boxOn').checked = s.box;
   syncSliderLabels(); updateFontPreview(); updatePreviewColors(); applyPreviewFx();
 }
-function applyPreset() {
+async function applyPreset() {
+  await ensurePresetsLoaded();   // 起動直後でも必ず読めるように
   const p = loadPresets().find(x => x.name === document.getElementById('presetSelect').value);
   if (p) applyStyleObj(p.style);
 }
+// ドロップダウンを開いた時点でも再取得（起動時のロード失敗をリカバー）
+(function () {
+  const ps = document.getElementById('presetSelect');
+  if (ps) ps.addEventListener('focus', ensurePresetsLoaded);
+})();
 function saveCurrentPreset() {
   // Electron は window.prompt() が無効なのでインライン入力欄から取得する
   const inp = document.getElementById('presetName');
@@ -1247,7 +1277,8 @@ function restoreLastStyle() {
 }
 function wireStyleMemory() {
   ['fontSelect', 'cSub', 'cHi', 'cOut', 'cTitle', 'capSize', 'capOutline',
-   'titleSize', 'titleOutline', 'animSelect', 'effectSelect', 'boxOn', 'cBox', 'boxPad'].forEach(id => {
+   'titleSize', 'titleOutline', 'animSelect', 'boxOn', 'cBox', 'boxPad',
+   'shadowD', 'shadowA', 'shadowB'].forEach(id => {
     const e = document.getElementById(id);
     if (e) {
       e.addEventListener('change', saveLastStyle); e.addEventListener('input', saveLastStyle);
@@ -1347,7 +1378,8 @@ async function saveDetail(btn) {
     if (gc) gc.querySelector('.clip-title').textContent = cid + '. ' + (newTitle || '無題');
     st.textContent = data.warning ? ('✓ 保存（' + data.warning + '）') : '✓ 保存しました';
     _markSavedState(ed);   // 現在の編集内容＝焼き込み済み（再生中の二重表示防止の基準を更新）
-    if (reload) { ed.dataset.loaded = ''; loadEditor(ed); }   // 延長/追加指示でテロップが変わる
+    // 保存後は必ずサーバの実データ(manifest)から再読込＝画面の状態と動画/保存値の不整合を根絶
+    ed.dataset.loaded = ''; loadEditor(ed);
   } catch (e) {
     _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰（ディスクは未変更）
     st.textContent = 'エラー: ' + e.message;
@@ -2190,7 +2222,8 @@ function _editorPayload(ed) {
     return o;
   });
   const style = {};
-  const q = (sel, key) => { const e = ed.querySelector(sel); if (e) style[key] = +e.value; };
+  // NaN は JSON で null になりサーバ側で無視される（＝設定が反映されない）ため必ず数値のみ送る
+  const q = (sel, key) => { const e = ed.querySelector(sel); if (e) { const n = +e.value; if (!isNaN(n)) style[key] = n; } };
   q('.ed-capsz', 'caption_size'); q('.ed-ttlsz', 'title_size');
   q('.ed-capol', 'outline_width'); q('.ed-ttlol', 'title_outline_width');
   const tw = ed.querySelector('.ed-ttlw'); if (tw) style.title_width = (+tw.value || 66) / 100;   // タイトル幅（%→比率）
@@ -2243,7 +2276,8 @@ async function saveClip(btn) {
     }
     st.textContent = data.warning ? ('✓ 更新（' + data.warning + '）') : '✓ 更新しました';
     _markSavedState(ed);   // 現在の編集内容＝焼き込み済み（再生中の二重表示防止の基準を更新）
-    if (reload) { ed.dataset.loaded = ''; loadEditor(ed); }
+    // 保存後は必ずサーバの実データから再読込（画面と保存値のズレを根絶）
+    ed.dataset.loaded = ''; loadEditor(ed);
   } catch (e) {
     _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰
     st.textContent = 'エラー: ' + e.message;
@@ -2612,7 +2646,9 @@ function bulkStyleFromCreate() {
     box_pad: +v('boxPad'),
     animate: animV !== 'none',
     animation: animV,
-    effect: v('effectSelect'),
+    shadow_depth: +v('shadowD'),
+    shadow_alpha: (+v('shadowA') || 0) / 100,
+    shadow_blur: +v('shadowB'),
   };
 }
 
