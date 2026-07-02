@@ -427,6 +427,18 @@ function downloadClip(path, title) {
   return false;
 }
 
+// 詳細編集ページから、今開いているクリップをダウンロード
+function downloadDetailClip() {
+  const ed = document.getElementById('detailEditor');
+  if (!ed || !ed.dataset.job) return;
+  const job = ed.dataset.job, cid = ed.dataset.cid;
+  const title = ((ed.querySelector('.ed-title') || {}).value || '').trim()
+    || (document.getElementById('detailTitle').textContent || 'clip').replace(/^\d+\.\s*/, '');
+  const safe = String(title || 'clip').replace(/[\\/:*?"<>|]/g, '').slice(0, 60) || 'clip';
+  const path = job + '/clip_' + ('0' + cid).slice(-2) + '.mp4';
+  downloadClip(encodeURI(path), safe);
+}
+
 // ===== フォント一覧・プレビュー・よく使う色 =====
 let _lastColorInput = null;
 

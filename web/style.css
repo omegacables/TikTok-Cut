@@ -752,3 +752,9 @@ html { font-size: 108%; }
 }
 /* ステータスが「エラー:」で始まるときは赤く目立たせる（JSでclass付与） */
 .ed-status.err, #detailSaveStatus.err { color: var(--err); font-weight: 700; }
+
+/* 詳細編集: プレビュー下のダウンロードボタン（v0.7.4） */
+.detail-dl { width: 100%; margin-top: 12px; padding: 12px; font-size: .98rem;
+  background: var(--surface-2); border: 1px solid var(--accent-2);
+  color: var(--accent-2); font-weight: 700; }
+.detail-dl:hover { background: rgba(37,244,238,.12); }
