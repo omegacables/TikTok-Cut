@@ -469,7 +469,12 @@ def get_clip(job: str, cid: int):
     if not mf.exists():
         raise HTTPException(404, "クリップ情報が見つかりません")
     m = _load_manifest(mf, required=("id",))
-    return {"id": m["id"], "title": m.get("title", ""), "hook": m.get("hook", ""),
+    try:
+        _input_exists = bool(m.get("input_video")) and Path(str(m["input_video"])).exists()
+    except OSError:
+        _input_exists = False
+    return {"id": m["id"], "input_exists": _input_exists,
+            "title": m.get("title", ""), "hook": m.get("hook", ""),
             "telops": m.get("telops", []), "style": m.get("style", {}),
             "telops_orig": m.get("telops_orig", []),   # 「初期設定に戻す」用の原字幕
             "keeps": m.get("keeps"), "keeps_orig": m.get("keeps_orig"),   # 部分カット（残し区間）

@@ -1338,7 +1338,15 @@ function openDetail(job, cid, title) {
 // 詳細ページ: 字幕編集＋効果音を1回でまとめて保存・再作成
 async function saveDetail(btn) {
   const ed = document.getElementById('detailEditor');
-  if (!ed.dataset.loaded) return;
+  const st0 = document.getElementById('detailSaveStatus');
+  if (!ed.dataset.loaded) {   // 旧実装は無言で何もしなかった → 理由を必ず表示
+    if (st0) st0.textContent = '編集データを読み込み中です。数秒待ってからもう一度押してください。';
+    return;
+  }
+  if (ed._inputExists === false) {
+    if (st0) { st0.textContent = 'エラー: 元動画が見つからないため再作成できません（動画を元の場所に戻すと保存できます）。'; st0.classList.add('err'); }
+    return;
+  }
   const job = ed.dataset.job, cid = ed.dataset.cid;
   const payload = _editorPayload(ed);
   payload.sfx = _editorSfx(ed);
@@ -1360,6 +1368,7 @@ async function saveDetail(btn) {
   }
   const reload = !!(payload.extend_start || payload.extend_end) || cutReload;
   const st = document.getElementById('detailSaveStatus');
+  st.classList.remove('err');
   st.textContent = reload ? '再調整してまとめて再作成中...' : '字幕＋効果音をまとめて再作成中...';
   btn.disabled = true;
   // 再作成前に動画ファイルを解放（プレイヤーのロックで os.replace が WinError5 になるのを防ぐ）
@@ -1383,6 +1392,7 @@ async function saveDetail(btn) {
   } catch (e) {
     _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰（ディスクは未変更）
     st.textContent = 'エラー: ' + e.message;
+    st.classList.add('err');
   }
   btn.disabled = false;
 }
@@ -1444,6 +1454,8 @@ async function loadEditor(ed) {
   try {
     const data = await (await fetch('/api/clip/' + job + '/' + cid)).json();
     if (ed._loadGen !== gen) return;   // 別クリップの読込が始まっていたら破棄
+    // 元動画が見つからない作品は再作成不可＝先に分かりやすく知らせる（保存時エラーの防止）
+    ed._inputExists = (data.input_exists !== false);
     ed._dur = +data.clip_duration || 0;
     const _mkTelop = t => ({
       start: +t.start || 0, end: +t.end || 0, text: t.text || '',
@@ -1581,6 +1593,13 @@ async function loadEditor(ed) {
       sr.addEventListener('input', () => { ed._subOffset = +sr.value || 0; if (sv) sv.textContent = ed._subOffset.toFixed(2); renderPreviewTelops(ed); });
     })();
     updateEditorPreview(ed);
+    // 元動画なし: 警告バナーを編集パネル先頭に出す（保存ボタンを押して初めてエラーになるのを防ぐ）
+    if (!ed._inputExists) {
+      const warn = document.createElement('div');
+      warn.className = 'ed-warn-banner';
+      warn.textContent = '⚠ 元動画ファイルが見つかりません（移動または削除された可能性）。閲覧・ダウンロードはできますが、編集の保存（再作成）はできません。';
+      ed.insertBefore(warn, ed.firstChild);
+    }
     ed.dataset.loaded = '1';
     // 最初のテロップ位置へ動画をseekして初期プレビューを表示
     if (ed._telops && ed._telops.length) {

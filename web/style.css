@@ -743,3 +743,12 @@ html { font-size: 108%; }
 
 /* ── モード切替を大きく ── */
 .mode-tab { padding: 10px 22px; font-size: .95rem; }
+
+/* ===== 保存できない理由の可視化（v0.7.3） ===== */
+.ed-warn-banner {
+  background: rgba(255,180,60,.12); border: 1px solid rgba(255,180,60,.45);
+  color: #ffcf7d; border-radius: 10px; padding: 12px 14px;
+  font-size: .92rem; line-height: 1.55; margin-bottom: 14px;
+}
+/* ステータスが「エラー:」で始まるときは赤く目立たせる（JSでclass付与） */
+.ed-status.err, #detailSaveStatus.err { color: var(--err); font-weight: 700; }
