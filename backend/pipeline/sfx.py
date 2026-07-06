@@ -70,7 +70,9 @@ def apply_sfx(video_path: str | Path, items, *, clip_duration: float = 0.0,
         base_label = "[0:a]"
         sfx_start = 1
     else:
-        dur = max(0.1, float(clip_duration) or 0.0) or 60.0
+        # clip_duration 不明(0)時は 60 秒。max() を先に通すと 0.1 が truthy になり
+        # フォールバックが死ぬ（無音土台0.1秒→amix duration=first で効果音ごと切れる）ため順序厳守。
+        dur = max(0.1, float(clip_duration or 0.0) or 60.0)
         inputs += ["-f", "lavfi", "-t", f"{dur:.3f}",
                    "-i", "anullsrc=channel_layout=stereo:sample_rate=44100"]
         base_label = "[1:a]"

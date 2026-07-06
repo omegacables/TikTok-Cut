@@ -36,6 +36,13 @@ _PORT = 8000
 API_TOKEN = os.environ.get("TIKTOKCUT_API_TOKEN", "").strip()
 _jobs: dict[str, dict] = {}
 _jobs_lock = threading.Lock()
+# クリップ再作成のジョブ単位ロック（個別保存と一括適用が同じ mp4/manifest へ同時に書くのを防ぐ）
+_render_locks: dict[str, threading.Lock] = {}
+
+
+def _render_lock(job: str) -> threading.Lock:
+    with _jobs_lock:
+        return _render_locks.setdefault(job, threading.Lock())
 
 
 def _output_path(*parts: str | int) -> Path:
@@ -257,7 +264,7 @@ def _run(job_id: str, src: str, clip_count: int, meta_title: str | None,
 
 
 @app.post("/api/process")
-async def process(
+def process(  # 同期def＝FastAPIがスレッドプールで実行（巨大アップロードのコピーでイベントループを塞がない）
     url: str = Form(""),
     title: str = Form(""),
     clip_count: int = Form(SETTINGS.default_clip_count),
@@ -394,7 +401,10 @@ def status(job_id: str):
     # メモリに無ければディスクの result.json から復元（再起動後など）
     rj = _output_path(job_id, "result.json")
     if rj.exists():
-        data = json.loads(rj.read_text(encoding="utf-8"))
+        try:
+            data = json.loads(rj.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            raise HTTPException(404, "ジョブ結果の読み込みに失敗しました（result.json が壊れています）")
         return {
             "job_id": job_id,
             "status": "completed",
@@ -645,11 +655,23 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
     if not _src or not Path(_src).exists():
         raise HTTPException(400, "元動画が見つかりません（移動または削除された可能性）。"
                                  "再生成には作成時の動画ファイルが必要です")
-    mf.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
-    try:
-        render_from_manifest(m["input_video"], _job_dir(job), m)
-    except Exception as e:  # noqa: BLE001
-        raise HTTPException(500, f"再作成に失敗しました: {e}")
+    # 一括適用(_run_bulk)と同じクリップへ同時に書かないようジョブ単位で直列化。
+    # 描画失敗時は manifest を元に戻す（「保存済みなのに動画は旧内容」のズレを防ぐ）。
+    with _render_lock(job):
+        try:
+            old_txt = mf.read_text(encoding="utf-8")
+        except OSError:
+            old_txt = None
+        mf.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+        try:
+            render_from_manifest(m["input_video"], _job_dir(job), m)
+        except Exception as e:  # noqa: BLE001
+            if old_txt is not None:
+                try:
+                    mf.write_text(old_txt, encoding="utf-8")
+                except OSError:
+                    pass
+            raise HTTPException(500, f"再作成に失敗しました: {e}")
     # フォールバック描画（字幕維持/互換）が使われた場合は編集UIに通知（サイレント失敗を防ぐ）
     mode = m.get("_render_mode", "full")
     warn = {"subs": "演出/ロゴなしの簡易モードで作成しました（字幕は入っています）",
@@ -682,10 +704,11 @@ def _run_bulk(bulk_id: str, job_dir: Path, manifests: list[Path], patch: dict) -
         for i, mf in enumerate(manifests):
             _set(bulk_id, progress=int(i / n * 95), step=f"クリップ {i + 1}/{n} を再作成中")
             try:
-                m = json.loads(mf.read_text(encoding="utf-8"))
-                m.setdefault("style", {}).update(patch)
-                mf.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
-                render_from_manifest(m["input_video"], job_dir, m)
+                with _render_lock(job_dir.name):   # 個別保存(update_clip)との同時書込みを防ぐ
+                    m = json.loads(mf.read_text(encoding="utf-8"))
+                    m.setdefault("style", {}).update(patch)
+                    mf.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+                    render_from_manifest(m["input_video"], job_dir, m)
             except Exception as e:  # noqa: BLE001  1本失敗しても続行
                 failed += 1
                 print(f"[bulk] {mf.name} 再作成失敗: {e}", flush=True)
@@ -712,6 +735,9 @@ def bulk_style(job: str, payload: dict = Body(...)):
         patch["font"] = valid_font(patch["font"])
     bulk_id = f"{job}__bulk"
     with _jobs_lock:
+        ex = _jobs.get(bulk_id)
+        if ex and ex.get("status") == "processing":
+            raise HTTPException(409, "一括適用が既に実行中です。完了を待ってから再実行してください")
         _jobs[bulk_id] = {
             "job_id": bulk_id, "status": "processing", "progress": 0,
             "step": "準備中", "clips": [], "error": "", "warning": "",
@@ -754,6 +780,19 @@ def _extend_clip(job: str, m: dict, ext_s: float, ext_e: float) -> None:
             continue
         if tp.get("style"):
             item["style"] = tp["style"]
+        # 編集済みの強調・アニメ・レイヤー・位置も延長で消さない
+        if tp.get("emphasis"):
+            item["emphasis"] = True
+        if tp.get("animation"):
+            item["animation"] = str(tp["animation"])
+        try:
+            if int(tp.get("layer") or 0):
+                item["layer"] = max(0, min(20, int(tp["layer"])))
+        except (TypeError, ValueError):
+            pass
+        pos = tp.get("pos")
+        if isinstance(pos, dict) and "x" in pos and "y" in pos:
+            item["pos"] = pos
         kept.append(item)
 
     # 頭の新規領域 [new_start, old_start] → 新クリップ相対 [0, shift]

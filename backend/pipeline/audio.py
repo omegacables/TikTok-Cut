@@ -19,20 +19,35 @@ def loudness(video_path: str | Path, sr: int = 16000, win: float = 0.5,
     """(時刻[s], ラウドネス[dB]) を窓 `win` 秒ごとに返す。失敗時は ([], [])。"""
     import numpy as np
 
-    proc = subprocess.run(
+    # 長時間アーカイブでは PCM 全体が数百MB になるため、一括読みせず窓単位でストリーム集計する
+    n = int(sr * win)
+    win_bytes = 2 * n   # s16le = 2 bytes/sample
+    proc = subprocess.Popen(
         [ffmpeg, "-hide_banner", "-nostats", "-i", str(Path(video_path).resolve()),
          "-vn", "-ac", "1", "-ar", str(sr), "-f", "s16le", "-"],
         stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
     )
-    pcm = np.frombuffer(proc.stdout, dtype=np.int16).astype(np.float32) / 32768.0
-    n = int(sr * win)
-    if pcm.size < n:
+    meansq: list[float] = []
+    buf = b""
+    try:
+        while True:
+            chunk = proc.stdout.read(1 << 20)
+            if not chunk:
+                break
+            buf += chunk
+            nb = (len(buf) // win_bytes) * win_bytes
+            if nb:
+                pcm = np.frombuffer(buf[:nb], dtype=np.int16).astype(np.float32) / 32768.0
+                meansq.extend((pcm.reshape(-1, n) ** 2).mean(axis=1).tolist())
+                buf = buf[nb:]
+    finally:
+        proc.stdout.close()
+        proc.wait()
+    if not meansq:
         return [], []
-    frames = pcm.size // n
-    blocks = pcm[: frames * n].reshape(frames, n)
-    rms = np.sqrt((blocks ** 2).mean(axis=1) + 1e-9)
+    rms = np.sqrt(np.array(meansq) + 1e-9)
     db = 20.0 * np.log10(rms + 1e-9)
-    times = (np.arange(frames) * win).tolist()
+    times = (np.arange(len(meansq)) * win).tolist()
     return times, db.tolist()
 
 

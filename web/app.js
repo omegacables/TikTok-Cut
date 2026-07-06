@@ -346,8 +346,10 @@ function resetStartBtn() {
 }
 
 function esc(s) {
+  // 引用符もエスケープ（属性値に埋め込むためタイトル等の " ' で属性を破られない）
   return String(s == null ? '' : s)
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 }
 
 function renderClips(clips) {
@@ -374,7 +376,7 @@ function renderClips(clips) {
         (c.caption ? '<div class="clip-caption">' + esc(c.caption) + '</div>' : '') +
         '<div class="tags">' + tags + '</div>' +
         '<button class="dl-btn" onclick="openDetailFromBtn(this)">✏️ 詳細編集（字幕・位置・効果音）</button>' +
-        '<a class="dl-btn" href="#" onclick="return downloadClip(\'' + encodeURI(c.file_path) + '\',\'' + esc((c.title || 'clip')).replace(/'/g, '') + '\')">動画をダウンロード</a>' +
+        '<a class="dl-btn" href="#" onclick="return downloadClip(\'' + encodeURI(c.file_path) + '\',\'' + esc(String(c.title || 'clip').replace(/['"\\]/g, '')) + '\')">動画をダウンロード</a>' +
       '</div>';
     grid.appendChild(card);
   });
@@ -767,12 +769,21 @@ function edRenderSelSfx(ed) {
 }
 // --- スクラブ / プレイヘッド / 追加 ---
 function edSeekVideo(ed, t) {
-  const v = _clipVideo(ed); if (v) { try { v.currentTime = Math.max(0, t + 0.02); } catch (_) {} }
+  const v = _clipVideo(ed); let sought = false;
+  if (v) { try { v.currentTime = Math.max(0, t + 0.02); sought = (v._edPreviewWired === true); } catch (_) {} }
   edPlayheadTo(ed, t);
-  const r = ed.querySelector('.ed-tl-time'); if (r) r.textContent = t.toFixed(1) + 's';
-  renderPreviewTelops(ed);
+  const r = _edTimeNode(ed); if (r) r.textContent = t.toFixed(1) + 's';
+  if (!sought) renderPreviewTelops(ed);   // seeking イベント配線済みならそちらで描画（二重描画を防ぐ）
 }
-function edPlayheadTo(ed, t) { const p = ed.querySelector('.ed-tl-playhead'); if (p) p.style.top = edT2y(t) + 'px'; }
+// 毎フレーム触るノードはキャッシュ（loadEditor で作り直されたら isConnected で検知して引き直す）
+function _edTimeNode(ed) {
+  let n = ed._tlTimeN; if (!n || !n.isConnected) n = ed._tlTimeN = ed.querySelector('.ed-tl-time');
+  return n;
+}
+function edPlayheadTo(ed, t) {
+  let p = ed._tlPhN; if (!p || !p.isConnected) p = ed._tlPhN = ed.querySelector('.ed-tl-playhead');
+  if (p) p.style.top = edT2y(t) + 'px';
+}
 function edWireLaneScrub(ed) {
   ed.querySelectorAll('.ed-tl-tel, .ed-tl-sfx').forEach(lane => {
     const isTel = lane.classList.contains('ed-tl-tel');
@@ -798,15 +809,21 @@ function edWireLaneScrub(ed) {
   });
 }
 function edPlaySfxAt(ed, t) {
-  // プレビュー再生中に効果音をその時刻で鳴らす（at を跨いだら再生）
+  // プレビュー再生中に「未保存の」効果音をその時刻で鳴らす（at を跨いだら再生）。
+  // 保存済み(baked)は動画音声に焼き込み済み＝ここで鳴らすと二重になるので除外。
   const prev = ed._lastSfxT;
   ed._lastSfxT = t;
   if (prev == null || t < prev || t - prev > 0.5) return;   // 初回/巻戻し/シーク跳びは鳴らさない
-  (ed._sfx || []).forEach(b => { if (b.at > prev && b.at <= t) _auditionSfx(((ed._sfxById || {})[b.id] || {}).file, b.gain); });
+  (ed._sfx || []).forEach(b => { if (!b.baked && b.at > prev && b.at <= t) _auditionSfx(((ed._sfxById || {})[b.id] || {}).file, b.gain); });
 }
 function edFollowScroll(ed, t) {
   // 再生に合わせてタイムラインを自動スクロール（プレイヘッドを可視域内に保つ）
-  const wrap = ed.querySelector('.ed-tl-wrap'); if (!wrap) return;
+  // clientHeight/scrollTop の読取りは強制リフローになるため 250ms に間引く（60fpsで毎回やるとカクつく）
+  const now = performance.now();
+  if (ed._followT != null && now - ed._followT < 250) return;
+  ed._followT = now;
+  let wrap = ed._tlWrapN; if (!wrap || !wrap.isConnected) wrap = ed._tlWrapN = ed.querySelector('.ed-tl-wrap');
+  if (!wrap) return;
   const y = edT2y(t), view = wrap.clientHeight, top = wrap.scrollTop;
   if (y < top + view * 0.25 || y > top + view * 0.75) {
     wrap.scrollTop = Math.max(0, y - view * 0.4);
@@ -818,7 +835,7 @@ function edWirePlayheadSync(ed) {
     const e = document.getElementById('detailEditor'); if (!e || !e.dataset.loaded) return;
     const t = v.currentTime || 0;
     edPlayheadTo(e, t);
-    const r = e.querySelector('.ed-tl-time'); if (r) r.textContent = t.toFixed(1) + 's';
+    const r = _edTimeNode(e); if (r) r.textContent = t.toFixed(1) + 's';
     if (!v.paused) { edFollowScroll(e, t); edPlaySfxAt(e, t); }   // 再生中: 追従＋効果音をプレビュー再生
     else e._lastSfxT = t;
   };
@@ -1283,7 +1300,12 @@ function deletePreset() {
 }
 
 // ===== 直近のスタイルを記憶（次回の既定に） =====
-function saveLastStyle() { _prefs.laststyle = currentStyleObj(); savePrefs(); }
+// スライダーの input は毎tick発火するため、localStorage 書込みは300msデバウンス
+let _lastStyleT = null;
+function saveLastStyle() {
+  clearTimeout(_lastStyleT);
+  _lastStyleT = setTimeout(() => { _prefs.laststyle = currentStyleObj(); savePrefs(); }, 300);
+}
 function restoreLastStyle() {
   try { if (_prefs.laststyle) applyStyleObj(_prefs.laststyle); } catch (_) {}
 }
@@ -1450,14 +1472,6 @@ function _bustGridCard(job, cid) {
 }
 
 // ===== 字幕の手動修正 =====
-function toggleEditor(btn) {
-  const ed = btn.parentElement.querySelector('.clip-editor');
-  if (!ed) return;
-  if (!ed.hidden) { ed.hidden = true; return; }
-  ed.hidden = false;
-  if (!ed.dataset.loaded) loadEditor(ed);
-}
-
 async function loadEditor(ed) {
   const job = ed.dataset.job, cid = ed.dataset.cid;
   // 素早くクリップを切り替えた際、先発の遅い fetch が後発の状態を上書きしないよう世代番号で防ぐ
@@ -1478,7 +1492,8 @@ async function loadEditor(ed) {
     ed._telopsOrig = (data.telops_orig || []).map(_mkTelop);   // 「初期設定に戻す」用の原字幕
     ed._telopsPristine = _subClone(ed._telops);   // 初期に戻す用スナップショット
     // 効果音（インラインタイムラインの効果音レーン）
-    ed._sfx = (data.sfx || []).map(s => ({ uid: 'b' + (_uidN++), id: s.id, at: +s.at || 0, gain: s.gain == null ? 1 : +s.gain }));
+    // baked=true: 保存済み＝動画音声に焼き込み済み。プレビュー再生でライブ再生すると二重になるため鳴らさない。
+    ed._sfx = (data.sfx || []).map(s => ({ uid: 'b' + (_uidN++), id: s.id, at: +s.at || 0, gain: s.gain == null ? 1 : +s.gain, baked: true }));
     ed._sfxById = {};
     try { const _sl = await getSfxList(); ed._sfxById = Object.fromEntries(_sl.map(s => [s.id, s])); } catch (_) {}
     ed._selTelop = -1; ed._selSfx = null;
@@ -1766,6 +1781,7 @@ function renderPreviewTelops(ed, replay, opts) {
   opts = opts || {};
   const frame = opts.frame || _edFrame(ed);
   if (!frame) return;
+  if (!opts.frame && ed._chipDragging) return;   // チップをドラッグ中に再生成するとドラッグが切れるためスキップ
   // 再生中: 動画に焼き込み済みのテロップは隠し（二重表示防止）、
   // まだ保存していない変更（追加・編集・移動）だけをチップで重ねて見せる。
   let burnedKeys = null;
@@ -1854,6 +1870,7 @@ function _attachTelopChipDrag(ed, chip, ti) {
     const onSide = plain && !inGrip
       && (e.clientX < r.left + 14 || e.clientX > r.right - 14);              // 左右端=幅
     try { chip.setPointerCapture(e.pointerId); } catch (_) {} e.preventDefault();
+    ed._chipDragging = true;   // 再生中の timeupdate 再描画でドラッグ中のチップが破棄されるのを防ぐ
     if (inGrip) {
       resizing = true;
       const szInp = ed.querySelector('.ed-capsz'), olInp = ed.querySelector('.ed-capol');
@@ -1904,6 +1921,7 @@ function _attachTelopChipDrag(ed, chip, ti) {
   const up = e => {
     const redo = resizing || widthing;
     dragging = false; resizing = false; widthing = false;
+    ed._chipDragging = false;
     try { chip.releasePointerCapture(e.pointerId); } catch (_) {}
     if (redo) renderPreviewTelops(ed);   // サイズ/幅確定後に全チップを正しいスタイルで再描画
   };
@@ -1936,10 +1954,7 @@ function wireReframe(ed) {
   _updateLetterboxBand(ed);
 }
 
-/* ===== 字幕調整（縦タイムライン）モーダル ===== */
-let _subEd = null, _subDraft = [], _subPristine = null, _subDur = 0, _subSelIdx = -1;
-const SUB_PX_PER_SEC = 80, SUB_SNAP = 0.1, SUB_MIN_DUR = 0.2, SUB_MIN_BLOCK_PX = 14;
-
+/* ===== テロップ複製ユーティリティ ===== */
 function _subClone(arr) {
   return (arr || []).map(t => ({
     start: +t.start || 0, end: +t.end || 0, text: t.text || '',
@@ -1947,190 +1962,6 @@ function _subClone(arr) {
     layer: +t.layer || 0, pos: (t.pos && t.pos.x != null) ? { x: +t.pos.x, y: +t.pos.y } : null,
   }));
 }
-function _subVideo() { return document.getElementById('detailVideo'); }
-function _subY2t(y) { return Math.max(0, Math.min(_subDur, y / SUB_PX_PER_SEC)); }
-function _subT2y(t) { return t * SUB_PX_PER_SEC; }
-function _subSnap(t) { return Math.round(t / SUB_SNAP) * SUB_SNAP; }
-function _subClamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
-function _subFmt(s) { const m = Math.floor(s / 60), ss = Math.floor(s % 60); return m + ':' + ('0' + ss).slice(-2); }
-
-function openSubModal() {
-  const ed = document.getElementById('detailEditor');
-  if (!ed || !ed._telops) return;   // クリップ未読込
-  _subEd = ed;
-  _subDur = ed._dur || 60;
-  _subDraft = _subClone(ed._telops);
-  if (!ed._telopsPristine) ed._telopsPristine = _subClone(ed._telops);   // 初回スナップショット
-  _subPristine = (ed._telopsOrig && ed._telopsOrig.length) ? ed._telopsOrig : ed._telopsPristine;
-  _subSelIdx = -1;
-  const f = document.getElementById('subFrame');
-  if (f) f.style.backgroundImage = ed._poster ? ('url(' + ed._poster + ')') : '';
-  _subRenderTimeline();
-  _subWireScrub();
-  // 先にモーダルを表示してレイアウトを確定させる（#subFrame の実幅 200px を得てからプレビュー描画）
-  document.getElementById('subModal').hidden = false;
-  _subRenderPreview();
-}
-function subCancel() { document.getElementById('subModal').hidden = true; _subEd = null; }
-function subReset() {
-  _subDraft = _subClone(_subPristine || []);
-  _subSelIdx = -1; _subRenderBlocks(); _subRenderPreview();
-}
-function subCommit() {
-  if (_subEd) {
-    _subDraft.sort((a, b) => a.start - b.start);
-    _subEd._telops = _subClone(_subDraft);
-    edRenderTelopBlocks(_subEd);
-    if (typeof _syncTimelineTelops === 'function') { try { _syncTimelineTelops(_subEd); } catch (_) {} }
-    renderPreviewTelops(_subEd, false);
-  }
-  document.getElementById('subModal').hidden = true; _subEd = null;
-}
-
-function _subRenderTimeline() {
-  const track = document.getElementById('subTrack'), gutter = document.getElementById('subGutter');
-  const h = Math.max(140, _subT2y(_subDur));
-  track.style.height = h + 'px'; gutter.style.height = h + 'px';
-  gutter.querySelectorAll('.sub-tick').forEach(n => n.remove());
-  const step = _subDur > 40 ? 5 : 1;
-  for (let s = 0; s <= Math.ceil(_subDur); s += step) {
-    const tick = document.createElement('div');
-    tick.className = 'sub-tick'; tick.style.top = _subT2y(s) + 'px';
-    tick.innerHTML = '<span class="sub-tick-label">' + _subFmt(s) + '</span>';
-    gutter.appendChild(tick);
-  }
-  _subRenderBlocks();
-}
-function _subRenderBlocks() {
-  const track = document.getElementById('subTrack');
-  track.querySelectorAll('.sub-block').forEach(n => n.remove());   // #subPlayhead は残す
-  _subDraft.forEach((tp, i) => {
-    const top = _subT2y(tp.start);
-    const hh = Math.max(SUB_MIN_BLOCK_PX, _subT2y(tp.end) - _subT2y(tp.start));
-    const el = document.createElement('div');
-    el.className = 'sub-block' + (i === _subSelIdx ? ' sel' : '');
-    el.style.top = top + 'px'; el.style.height = hh + 'px'; el.dataset.i = i;
-    el.innerHTML =
-      '<div class="sub-grip sub-grip-top"></div>' +
-      '<button type="button" class="sub-del" tabindex="-1">✕</button>' +
-      '<div class="sub-block-body"><textarea class="sub-block-text" rows="1" placeholder="字幕を入力">' +
-        esc(tp.text || '') + '</textarea></div>' +
-      '<div class="sub-grip sub-grip-bot"></div>';
-    if (hh < 22) el.querySelectorAll('.sub-grip').forEach(g => g.style.height = Math.max(4, hh * 0.3) + 'px');
-    _subWireBlock(el, i);
-    track.appendChild(el);
-  });
-}
-function _subMarkSel() {
-  document.querySelectorAll('#subTrack .sub-block').forEach(n => n.classList.toggle('sel', +n.dataset.i === _subSelIdx));
-}
-function _subWireBlock(el, i) {
-  let mode = null, startY = 0, t0s = 0, t0e = 0;
-  const topG = el.querySelector('.sub-grip-top'), botG = el.querySelector('.sub-grip-bot');
-  const ta = el.querySelector('.sub-block-text');
-  topG.addEventListener('pointerenter', e => _subTip(e, 'ドラッグで開始時刻を変更'));
-  topG.addEventListener('pointerleave', _subTipHide);
-  botG.addEventListener('pointerenter', e => _subTip(e, 'ドラッグで終了時刻を変更'));
-  botG.addEventListener('pointerleave', _subTipHide);
-  el.addEventListener('pointerdown', e => {
-    if (e.target.classList.contains('sub-block-text') || e.target.classList.contains('sub-del')) return;
-    _subSelIdx = i; _subMarkSel();
-    mode = e.target.classList.contains('sub-grip-top') ? 'top'
-         : e.target.classList.contains('sub-grip-bot') ? 'bot' : 'move';
-    const tp = _subDraft[i]; t0s = tp.start; t0e = tp.end; startY = e.clientY;
-    try { el.setPointerCapture(e.pointerId); } catch (_) {}
-    e.preventDefault(); e.stopPropagation();
-  });
-  el.addEventListener('pointermove', e => {
-    if (!mode) return;
-    const tp = _subDraft[i]; if (!tp) return;
-    const dt = _subSnap((e.clientY - startY) / SUB_PX_PER_SEC);
-    if (mode === 'move') {
-      const len = t0e - t0s;
-      const s = _subClamp(t0s + dt, 0, _subDur - len);
-      tp.start = +s.toFixed(2); tp.end = +(s + len).toFixed(2);
-    } else if (mode === 'top') {
-      tp.start = +_subClamp(t0s + dt, 0, tp.end - SUB_MIN_DUR).toFixed(2);
-    } else {
-      tp.end = +_subClamp(t0e + dt, tp.start + SUB_MIN_DUR, _subDur).toFixed(2);
-    }
-    el.style.top = _subT2y(tp.start) + 'px';
-    el.style.height = Math.max(SUB_MIN_BLOCK_PX, _subT2y(tp.end) - _subT2y(tp.start)) + 'px';
-    _subSyncScrubToBlock(tp, mode);
-  });
-  const up = e => { if (!mode) return; mode = null; try { el.releasePointerCapture(e.pointerId); } catch (_) {} _subRenderPreview(); };
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
-  ta.addEventListener('input', () => { if (_subDraft[i]) { _subDraft[i].text = ta.value; _subRenderPreview(); } });
-  ta.addEventListener('pointerdown', e => e.stopPropagation());
-  el.querySelector('.sub-del').addEventListener('click', e => {
-    e.stopPropagation();
-    _subDraft.splice(i, 1);
-    if (_subSelIdx === i) _subSelIdx = -1;
-    _subRenderBlocks(); _subRenderPreview();
-  });
-}
-function _subAddAt(t) {
-  const s = _subSnap(_subClamp(t, 0, _subDur - SUB_MIN_DUR));
-  const len = Math.min(1.5, Math.max(SUB_MIN_DUR, _subDur - s));
-  _subDraft.push({ start: +s.toFixed(2), end: +(s + len).toFixed(2), text: '',
-    style: '', emphasis: false, animation: '', layer: 0, pos: null });
-  _subDraft.sort((a, b) => a.start - b.start);
-  _subSelIdx = _subDraft.findIndex(x => Math.abs(x.start - s) < 1e-6);
-  _subRenderBlocks();
-  const inp = document.querySelector('.sub-block[data-i="' + _subSelIdx + '"] .sub-block-text');
-  if (inp) inp.focus();
-}
-function _subWireScrub() {
-  const modal = document.getElementById('subModal');
-  if (modal.dataset.wired) return; modal.dataset.wired = '1';
-  const track = document.getElementById('subTrack');
-  let downY = null, moved = false;
-  track.addEventListener('pointerdown', e => {
-    if (e.target.closest('.sub-block')) return;
-    downY = e.clientY; moved = false;
-    try { track.setPointerCapture(e.pointerId); } catch (_) {}
-  });
-  track.addEventListener('pointermove', e => {
-    if (downY == null) return;
-    if (Math.abs(e.clientY - downY) > 4) moved = true;
-    if (moved) _subScrubTo(e.clientY);
-  });
-  track.addEventListener('pointerup', e => {
-    if (downY == null) return;
-    if (!moved && !e.target.closest('.sub-block')) {
-      const r = track.getBoundingClientRect();
-      _subAddAt(_subY2t(e.clientY - r.top));
-    }
-    downY = null; try { track.releasePointerCapture(e.pointerId); } catch (_) {}
-  });
-}
-function _subScrubTo(clientY) {
-  const r = document.getElementById('subTrack').getBoundingClientRect();
-  const t = _subY2t(clientY - r.top);
-  const v = _subVideo(); if (v) { try { v.currentTime = t; } catch (_) {} }
-  _subPlayheadTo(t); _subRenderPreview();
-  document.getElementById('subTimeRead').textContent = t.toFixed(1) + 's';
-}
-function _subPlayheadTo(t) { const p = document.getElementById('subPlayhead'); if (p) p.style.top = _subT2y(t) + 'px'; }
-function _subSyncScrubToBlock(tp, mode) {
-  const t = (mode === 'bot') ? tp.end : tp.start;
-  const v = _subVideo(); if (v) { try { v.currentTime = Math.max(0, t + 0.02); } catch (_) {} }
-  _subPlayheadTo(t);
-  document.getElementById('subTimeRead').textContent = t.toFixed(1) + 's';
-  _subRenderPreview();
-}
-function _subRenderPreview() {
-  if (!_subEd) return;
-  const frame = document.getElementById('subFrame');
-  renderPreviewTelops(_subEd, false, { frame: frame, telops: _subDraft, noDrag: true });
-}
-function _subTip(e, msg) {
-  const tip = document.getElementById('subTooltip');
-  tip.textContent = msg; tip.hidden = false;
-  tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px';
-}
-function _subTipHide() { const t = document.getElementById('subTooltip'); if (t) t.hidden = true; }
 
 function applyEditorFx(ed) {
   const a = (ed.querySelector('.ed-anim') || {}).value || 'default';
@@ -2275,10 +2106,6 @@ function _editorPayload(ed) {
   if (ed._subOffset != null) out.sub_offset = +ed._subOffset || 0;                     // 字幕タイミング
   return out;
 }
-function _timelineSfx(tl) {
-  return (tl._blocks || []).map(b => ({ id: b.id, at: +b.at.toFixed(3), gain: +b.gain.toFixed(3) }));
-}
-
 async function saveClip(btn) {
   const ed = btn.closest('.clip-editor');
   const job = ed.dataset.job, cid = ed.dataset.cid;
@@ -2316,7 +2143,7 @@ async function saveClip(btn) {
   btn.disabled = false;
 }
 
-// ===== 効果音タイムライン（per-clip。サーバ波形＋ドラッグ配置→amixで焼き込み） =====
+// ===== 効果音 共通ユーティリティ（一覧キャッシュ・試聴） =====
 let _sfxListCache = null;
 let _uidN = 1;
 let _tlAudio = null;   // 試聴用 <audio> は1つだけ使い回す
@@ -2333,329 +2160,6 @@ function _auditionSfx(file, gain) {
   try { _tlAudio.currentTime = 0; } catch (_) {}
   _tlAudio.play().catch(() => {});
 }
-function _tlVideo(tl) { return _clipVideo(tl); }
-function _selBlock(tl) { return (tl._blocks || []).find(b => b.uid === tl._selUid) || null; }
-
-function toggleTimeline(btn) {
-  const tl = btn.parentElement.querySelector('.clip-timeline');
-  if (!tl) return;
-  if (!tl.hidden) { tl.hidden = true; return; }
-  tl.hidden = false;
-  if (!tl.dataset.loaded) loadTimeline(tl);
-}
-
-async function loadTimeline(tl) {
-  const job = tl.dataset.job, cid = tl.dataset.cid;
-  tl.innerHTML = '<div class="ed-loading">読み込み中...</div>';
-  try {
-    const [clip, wf, list] = await Promise.all([
-      fetch('/api/clip/' + job + '/' + cid).then(r => r.json()),
-      fetch('/api/clip/' + job + '/' + cid + '/waveform').then(r => r.json()),
-      getSfxList(),
-    ]);
-    tl._dur = wf.duration || clip.clip_duration || 0;
-    tl._peaks = wf.peaks || [];
-    tl._byId = Object.fromEntries(list.map(s => [s.id, s]));
-    tl._blocks = (clip.sfx || []).map(s => ({
-      uid: 'b' + (_uidN++), id: s.id, at: +s.at || 0, gain: s.gain == null ? 1 : +s.gain,
-    }));
-    tl._selUid = null;
-    renderTimeline(tl, list);
-    tl.dataset.loaded = '1';
-  } catch (e) {
-    tl.innerHTML = '<div class="ed-loading">読み込みに失敗しました</div>';
-  }
-}
-
-function renderTimeline(tl, list) {
-  const pal = list.map(s =>
-    '<button type="button" class="sfx-chip" data-id="' + esc(s.id) + '">' +
-    (s.emoji ? s.emoji + ' ' : '') + esc(s.label) +
-    '<span class="sfx-dur">' + (s.dur || 0).toFixed(1) + 's</span></button>'
-  ).join('');
-  tl.innerHTML =
-    '<div class="tl-help">上段＝<b>テロップ</b>（青・ドラッグで時間移動・「＋テロップ」で追加→字幕欄に反映）／下段＝<b>効果音</b>（パレットで再生位置に追加）。波形をドラッグで再生位置移動。</div>' +
-    '<div class="tl-pal"><button type="button" class="mini-btn tl-addtel">＋テロップ</button>' + pal + '</div>' +
-    '<div class="tl-area">' +
-      '<div class="tl-tel-track"></div>' +
-      '<canvas class="tl-wave" height="48"></canvas>' +
-      '<div class="tl-track"></div>' +
-      '<div class="tl-ruler"></div>' +
-      '<div class="tl-playhead"></div>' +
-    '</div>' +
-    '<div class="tl-sel" hidden>' +
-      '<label class="slider-item">選択中の音量 <b class="tl-gain-o">100%</b>' +
-        '<input type="range" class="tl-gain" min="0" max="200" step="5" value="100"></label>' +
-      '<button type="button" class="mini-btn tl-prev">▶ 試聴</button>' +
-      '<button type="button" class="mini-btn tl-snap">再生位置へ</button>' +
-      '<button type="button" class="mini-btn tl-del">削除</button>' +
-    '</div>' +
-    '<div class="ed-actions"><button class="ed-save" onclick="saveTimeline(this)">効果音を反映して再作成</button>' +
-      '<span class="ed-status"></span></div>';
-
-  tl.querySelectorAll('.sfx-chip').forEach(b =>
-    b.addEventListener('click', () => addSfxBlock(tl, b.dataset.id)));
-  const addTel = tl.querySelector('.tl-addtel');
-  if (addTel) addTel.addEventListener('click', () => {
-    const ed = document.getElementById('detailEditor');
-    if (ed && ed.dataset.loaded) { const v = _tlVideo(tl); addTelop(ed, v ? v.currentTime : 0); }
-  });
-  const gain = tl.querySelector('.tl-gain');
-  gain.addEventListener('input', () => {
-    const b = _selBlock(tl); if (!b) return;
-    b.gain = (+gain.value) / 100;
-    tl.querySelector('.tl-gain-o').textContent = gain.value + '%';
-  });
-  tl.querySelector('.tl-prev').addEventListener('click', () => {
-    const b = _selBlock(tl); if (b) _auditionSfx((tl._byId[b.id] || {}).file, b.gain);
-  });
-  tl.querySelector('.tl-snap').addEventListener('click', () => {
-    const b = _selBlock(tl), v = _tlVideo(tl); if (!b || !v) return;
-    b.at = Math.max(0, Math.min(tl._dur, v.currentTime || 0));
-    layoutBlocks(tl);
-  });
-  tl.querySelector('.tl-del').addEventListener('click', () => {
-    const b = _selBlock(tl); if (!b) return;
-    tl._blocks = tl._blocks.filter(x => x.uid !== b.uid);
-    tl._selUid = null; tl.querySelector('.tl-sel').hidden = true; layoutBlocks(tl);
-  });
-
-  drawWave(tl);
-  layoutBlocks(tl);
-  layoutTelopBlocks(tl, document.getElementById('detailEditor'));
-  wireTimeline(tl);
-}
-
-// タイムラインのテロップトラック（編集UI ed._telops を可視化・ドラッグで時刻変更・追加と同期）
-function layoutTelopBlocks(tl, ed) {
-  const track = tl.querySelector('.tl-tel-track');
-  if (!track) return;
-  track.innerHTML = '';
-  if (!ed || !ed._telops) return;
-  const dur = tl._dur || ed._dur || 1;
-  let maxLayer = 0;
-  ed._telops.forEach(t => { maxLayer = Math.max(maxLayer, t.layer || 0); });
-  // 高レイヤーを上の段に（前面）。各レイヤーごとに行を作り、重なるテロップを段で分離。
-  for (let L = maxLayer; L >= 0; L--) {
-    const row = document.createElement('div');
-    row.className = 'tl-tel-row'; row.dataset.layer = L;
-    ed._telops.forEach((tp, i) => {
-      if ((tp.layer || 0) !== L) return;
-      const el = document.createElement('div');
-      el.className = 'tl-tel-block';
-      el.style.left = (Math.max(0, tp.start) / dur * 100) + '%';
-      el.style.width = Math.max(2, (Math.max(0.2, tp.end - tp.start)) / dur * 100) + '%';
-      el.textContent = 'L' + L + ' ' + (tp.text || '（空）').slice(0, 10);
-      el.title = tp.text || '';
-      el.dataset.i = i;
-      _attachTelopDrag(tl, ed, el, i, track);
-      row.appendChild(el);
-    });
-    track.appendChild(row);
-  }
-}
-function _attachTelopDrag(tl, ed, el, i, track) {
-  track = track || tl.querySelector('.tl-tel-track');
-  let dragging = false, dur0 = 0, rows = 1;
-  el.addEventListener('pointerdown', e => {
-    dragging = true; dur0 = (ed._telops[i].end - ed._telops[i].start) || 1;
-    rows = track.querySelectorAll('.tl-tel-row').length || 1;
-    try { el.setPointerCapture(e.pointerId); } catch (_) {}
-    e.preventDefault(); e.stopPropagation();
-  });
-  el.addEventListener('pointermove', e => {
-    if (!dragging) return;
-    const tp = ed._telops[i]; if (!tp) return;
-    const r = track.getBoundingClientRect();
-    const dur = tl._dur || ed._dur || 1;
-    const s = Math.max(0, Math.min(dur - 0.2, (e.clientX - r.left) / r.width * dur));
-    tp.start = +s.toFixed(2); tp.end = +Math.min(dur, s + dur0).toFixed(2);
-    el.style.left = (s / dur * 100) + '%';
-    const row = ed.querySelector('.ed-row[data-i="' + i + '"]');   // 該当行の時刻入力だけ同期
-    if (row) {
-      const si = row.querySelector('.ed-t-s'), ei = row.querySelector('.ed-t-e');
-      if (si) si.value = tp.start.toFixed(1);
-      if (ei) ei.value = tp.end.toFixed(1);
-    }
-  });
-  const up = e => {
-    if (!dragging) return; dragging = false;
-    try { el.releasePointerCapture(e.pointerId); } catch (_) {}
-    const tp = ed._telops[i];
-    // 離した縦位置からレイヤーを決定（上の段＝高レイヤー＝前面）
-    if (tp && rows > 1) {
-      const r = track.getBoundingClientRect();
-      const idxTop = Math.max(0, Math.min(rows - 1, Math.floor((e.clientY - r.top) / (r.height / rows))));
-      const newLayer = (rows - 1) - idxTop;
-      if (tp.layer !== newLayer) {
-        tp.layer = newLayer;
-        layoutTelopBlocks(tl, ed); edRenderTelopBlocks(ed); updateEditorPreview(ed);
-        return;
-      }
-    }
-    updateEditorPreview(ed);
-  };
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
-}
-
-function drawWave(tl) {
-  const c = tl.querySelector('.tl-wave');
-  if (!c) return;
-  const dpr = window.devicePixelRatio || 1;
-  const cssW = c.clientWidth || (c.parentElement ? c.parentElement.clientWidth : 0) || 600;
-  const cssH = c.clientHeight || 56;
-  c.width = Math.round(cssW * dpr); c.height = Math.round(cssH * dpr);
-  const ctx = c.getContext('2d');
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, cssW, cssH);
-  const peaks = tl._peaks || [];
-  if (!peaks.length) return;
-  const bw = cssW / peaks.length, mid = cssH / 2;
-  ctx.fillStyle = 'rgba(37,244,238,.45)';
-  for (let i = 0; i < peaks.length; i++) {
-    const h = Math.max(1, peaks[i] * (cssH - 4));
-    ctx.fillRect(i * bw, mid - h / 2, Math.max(1, bw - 1), h);
-  }
-}
-
-function layoutBlocks(tl) {
-  const track = tl.querySelector('.tl-track');
-  if (!track) return;
-  track.innerHTML = '';
-  const dur = tl._dur || 1;
-  (tl._blocks || []).forEach(b => {
-    const meta = tl._byId[b.id] || {};
-    const el = document.createElement('div');
-    el.className = 'sfx-block' + (b.uid === tl._selUid ? ' sel' : '');
-    el.style.left = (b.at / dur * 100) + '%';
-    el.style.width = Math.max(2.5, (meta.dur || 0.3) / dur * 100) + '%';
-    el.textContent = meta.emoji || '♪';
-    el.title = (meta.label || b.id) + ' @' + b.at.toFixed(2) + 's';
-    el.dataset.uid = b.uid;
-    _attachBlockDrag(tl, el, b);
-    track.appendChild(el);
-  });
-}
-
-function _attachBlockDrag(tl, el, b) {
-  const track = tl.querySelector('.tl-track');
-  let dragging = false;
-  el.addEventListener('pointerdown', e => {
-    dragging = true;
-    try { el.setPointerCapture(e.pointerId); } catch (_) {}
-    _selectBlock(tl, b.uid, true); e.preventDefault(); e.stopPropagation();   // 選択＝試聴
-  });
-  el.addEventListener('pointermove', e => {
-    if (!dragging) return;
-    const r = track.getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (e.clientX - r.left) / r.width));
-    b.at = +(x * (tl._dur || 0)).toFixed(3);
-    el.style.left = (x * 100) + '%';
-    el.title = ((tl._byId[b.id] || {}).label || b.id) + ' @' + b.at.toFixed(2) + 's';
-  });
-  const end = e => {
-    if (!dragging) return; dragging = false;
-    try { el.releasePointerCapture(e.pointerId); } catch (_) {}
-  };
-  el.addEventListener('pointerup', end);
-  el.addEventListener('pointercancel', end);
-}
-
-function _selectBlock(tl, uid, audition) {
-  tl._selUid = uid;
-  tl.querySelectorAll('.sfx-block').forEach(n => n.classList.toggle('sel', n.dataset.uid === uid));
-  const b = _selBlock(tl);
-  const sel = tl.querySelector('.tl-sel');
-  sel.hidden = !b;
-  if (b) {
-    const g = tl.querySelector('.tl-gain');
-    g.value = Math.round(b.gain * 100);
-    tl.querySelector('.tl-gain-o').textContent = g.value + '%';
-    if (audition) _auditionSfx((tl._byId[b.id] || {}).file, b.gain);   // 選択で試聴
-  }
-}
-
-function addSfxBlock(tl, id) {
-  const v = _tlVideo(tl);
-  const at = v ? Math.max(0, Math.min(tl._dur, v.currentTime || 0)) : 0;
-  const b = { uid: 'b' + (_uidN++), id: id, at: +at.toFixed(3), gain: 1 };
-  (tl._blocks = tl._blocks || []).push(b);
-  layoutBlocks(tl);
-  _selectBlock(tl, b.uid);
-  _auditionSfx((tl._byId[id] || {}).file, 1);
-}
-
-function wireTimeline(tl) {
-  const v = _tlVideo(tl);
-  const area = tl.querySelector('.tl-area');
-  const head = tl.querySelector('.tl-playhead');
-  if (!v || !area || !head) return;
-  const place = () => {
-    head.style.left = (tl._dur ? Math.max(0, Math.min(1, v.currentTime / tl._dur)) * 100 : 0) + '%';
-  };
-  v.addEventListener('timeupdate', place);
-  v.addEventListener('seeking', place);
-  v.addEventListener('seeked', place);
-  let raf = null;
-  const tick = () => { place(); raf = requestAnimationFrame(tick); };   // 再生中はrAFでなめらか
-  v.addEventListener('play', () => { if (!raf) tick(); });
-  v.addEventListener('pause', () => { if (raf) { cancelAnimationFrame(raf); raf = null; } place(); });
-
-  // スクラブ＝タイムライン全域(波形＋ルーラー)をドラッグで再生位置移動。ブロック上は無視。
-  let scrubbing = false;
-  const scrubAt = cx => {
-    const r = area.getBoundingClientRect();
-    const x = Math.max(0, Math.min(1, (cx - r.left) / r.width));
-    v.currentTime = x * (tl._dur || 0);
-    place();
-  };
-  area.addEventListener('pointerdown', e => {
-    if (e.target.closest('.sfx-block')) return;     // ブロックは移動操作なのでスクラブしない
-    scrubbing = true;
-    try { area.setPointerCapture(e.pointerId); } catch (_) {}
-    scrubAt(e.clientX); e.preventDefault();
-  });
-  area.addEventListener('pointermove', e => { if (scrubbing) scrubAt(e.clientX); });
-  const endScrub = e => { if (!scrubbing) return; scrubbing = false; try { area.releasePointerCapture(e.pointerId); } catch (_) {} };
-  area.addEventListener('pointerup', endScrub);
-  area.addEventListener('pointercancel', endScrub);
-  place();
-  if (!tl._rzWired) {
-    window.addEventListener('resize', () => {
-      if (tl.hidden) return;
-      clearTimeout(tl._rzT);
-      tl._rzT = setTimeout(() => { drawWave(tl); place(); }, 100);
-    });
-    tl._rzWired = true;
-  }
-}
-
-async function saveTimeline(btn) {
-  const tl = btn.closest('.clip-timeline');
-  const job = tl.dataset.job, cid = tl.dataset.cid;
-  const st = tl.querySelector('.ed-status');
-  st.textContent = '効果音をミックスして再作成中...';
-  btn.disabled = true;
-  const cap = _vCaps(_clipVideo(tl));   // 再作成前に解放（WinError5対策）
-  _vRelease(cap);
-  try {
-    const resp = await fetch('/api/clip/' + job + '/' + cid, {
-      method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ sfx: _timelineSfx(tl) }),
-    });
-    const data = await resp.json();
-    if (!resp.ok) throw new Error(data.detail || '失敗しました');
-    _vRestore(cap, job, cid);
-    if (!tl.closest('.clip-card')) _bustGridCard(job, cid);   // 詳細ページ→グリッドも更新
-    st.textContent = '✓ 効果音を反映しました';
-  } catch (e) {
-    _vRestore(cap, job, cid);   // 失敗時もプレビューを復帰
-    st.textContent = 'エラー: ' + e.message;
-  }
-  btn.disabled = false;
-}
-
 // ===== 全クリップ一括スタイル適用 =====
 function bulkStyleFromCreate() {
   const v = id => { const e = document.getElementById(id); return e ? e.value : ''; };
@@ -2772,7 +2276,7 @@ function bustAllClips() {
   });
   // 開いている（編集中の）UIは未保存の入力を失わないよう触らない。
   // 閉じている loaded 済みのものだけ無効化し、次に開いた時に最新を再読込させる。
-  document.querySelectorAll('.clip-editor, .clip-timeline').forEach(el => {
+  document.querySelectorAll('.clip-editor').forEach(el => {
     if (el.hidden) el.dataset.loaded = '';
   });
 }
