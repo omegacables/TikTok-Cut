@@ -1112,7 +1112,7 @@ function edSelectSfx(ed, uid, audition) {
   ed.querySelectorAll('.ed-tl-tel .ed-block').forEach(n => n.classList.remove('sel'));
   edRenderSelTelop(ed); edRenderSelSfx(ed);
   const b = (ed._sfx || []).find(x => x.uid === uid);
-  if (b && audition) _auditionSfx(_sfxSrc((ed._sfxById || {})[b.id]), b.gain);
+  if (b && audition) _auditionSfx(((ed._sfxById || {})[b.id] || {}).file, b.gain);
 }
 function edRenderSelSfx(ed) {
   const panel = ed.querySelector('.ed-sel-sfx'); if (!panel) return;
@@ -1134,7 +1134,7 @@ function edRenderSelSfx(ed) {
     });
     panel.addEventListener('click', e => {
       const bb = (ed._sfx || []).find(x => x.uid === ed._selSfx); if (!bb) return;
-      if (e.target.classList.contains('ed-sfx-prev')) { _auditionSfx(_sfxSrc((ed._sfxById || {})[bb.id]), bb.gain); }
+      if (e.target.classList.contains('ed-sfx-prev')) { _auditionSfx(((ed._sfxById || {})[bb.id] || {}).file, bb.gain); }
       else if (e.target.classList.contains('ed-sfx-del')) {
         edPushUndo(ed);
         ed._sfx = (ed._sfx || []).filter(x => x.uid !== bb.uid); ed._selSfx = null;
@@ -1190,7 +1190,7 @@ function edPlaySfxAt(ed, t) {
   const prev = ed._lastSfxT;
   ed._lastSfxT = t;
   if (prev == null || t < prev || t - prev > 0.5) return;   // 初回/巻戻し/シーク跳びは鳴らさない
-  (ed._sfx || []).forEach(b => { if (!b.baked && b.at > prev && b.at <= t) _auditionSfx(_sfxSrc((ed._sfxById || {})[b.id]), b.gain); });
+  (ed._sfx || []).forEach(b => { if (!b.baked && b.at > prev && b.at <= t) _auditionSfx(((ed._sfxById || {})[b.id] || {}).file, b.gain); });
 }
 function edFollowScroll(ed, t) {
   // 再生に合わせてタイムラインを自動スクロール（プレイヘッドを可視域内に保つ）
@@ -1509,7 +1509,6 @@ function _dispKeepsToOrig(dispKeeps, curKeeps, origDur) {   // 表示時間keeps
 function _editorSfx(ed) {
   return (ed._sfx || []).map(b => ({ id: b.id, at: +(+b.at).toFixed(3), gain: +(+b.gain).toFixed(3) }));
 }
-function addTelopBtn(btn) { const ed = btn.closest('.clip-editor'); const v = _clipVideo(ed); edAddTelopAt(ed, v ? v.currentTime : 0); }
 function edBulkAnim(sel) {
   const ed = sel.closest('.clip-editor'); const v = sel.value; sel.value = '';
   if (v === '_skip_') return;
@@ -2801,17 +2800,15 @@ async function getSfxList() {
   if (!_sfxListCache) _sfxListCache = await (await fetch('/api/sfx')).json();
   return _sfxListCache;
 }
-function _auditionSfx(fileOrUrl, gain) {
-  if (!fileOrUrl) return;
+function _auditionSfx(file, gain) {
+  if (!file) return;
   if (!_tlAudio) _tlAudio = new Audio();
-  // '/…' はそのままURL（ユーザー効果音）、それ以外は同梱の /sfx/<file>
-  const url = String(fileOrUrl).charAt(0) === '/' ? fileOrUrl : '/sfx/' + encodeURIComponent(fileOrUrl);
+  const url = '/sfx/' + encodeURIComponent(file);
   if (_tlAudio.src.indexOf(url) < 0) _tlAudio.src = url;
   _tlAudio.volume = Math.max(0, Math.min(1, gain));   // <audio>.volume は最大1（>1はffmpeg側で適用）
   try { _tlAudio.currentTime = 0; } catch (_) {}
   _tlAudio.play().catch(() => {});
 }
-function _sfxSrc(meta) { return (meta && (meta.url || meta.file)) || ''; }
 // ===== 全クリップ一括スタイル適用 =====
 function bulkStyleFromCreate() {
   const v = id => { const e = document.getElementById(id); return e ? e.value : ''; };

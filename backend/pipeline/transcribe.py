@@ -271,19 +271,6 @@ def _tokenize(text: str) -> list[str]:
 _GPU_FALLBACK = {"large-v3": "medium", "large-v2": "medium", "large": "medium", "medium": "small"}
 
 
-def _is_cuda_error(e: Exception) -> bool:
-    s = str(e).lower()
-    # OOM は CPU フォールバック対象外（CPU で large を回すと激遅になるため即エラーにする）。
-    if "out of memory" in s or "oom" in s or "cudamalloc" in s:
-        return False
-    # ライブラリ未ロード・デバイス不在・ドライバ不整合 → CPU フォールバック対象。
-    return any(k in s for k in (
-        "cublas", "cudnn", ".dll", "libcu", "not found", "cannot be loaded",
-        "cuda", "nvcuda", "nvrtc", "no capable", "driver", "device",
-        "nvml", "gpu", "compute capability", "runtime error",
-    ))
-
-
 def transcribe(
     video_path: str | Path,
     cache_path: str | Path | None = None,

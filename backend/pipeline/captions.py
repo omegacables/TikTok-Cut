@@ -1059,10 +1059,3 @@ def words_for_clip(all_words: list[Word], start: float, end: float) -> list[Word
             )
         )
     return out
-
-
-def write_ass(path: str | Path, content: str) -> Path:
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content, encoding="utf-8")
-    return path

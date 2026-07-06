@@ -230,13 +230,6 @@ def _env_int(key: str, default: int) -> int:
         return default
 
 
-def _env_float(key: str, default: float) -> float:
-    """浮動小数env。空/不正値は既定にフォールバック。"""
-    v = _env(key)
-    try:
-        return float(v) if v else default
-    except ValueError:
-        return default
 
 
 # ---------------------------------------------------------------------------

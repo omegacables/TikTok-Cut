@@ -6,19 +6,14 @@ base 音量を下げないよう `amix=...:normalize=0` を使い、各 SFX は 
 """
 from __future__ import annotations
 
-import os
 import subprocess
 from pathlib import Path
 
-from ..config import FFMPEG, SFX, sfx_path
+from ..config import FFMPEG, sfx_path
 
 
 class SfxError(RuntimeError):
     pass
-
-
-def list_sfx() -> list[dict]:
-    return SFX
 
 
 def _has_audio(video_path: Path, ffmpeg: str) -> bool:
