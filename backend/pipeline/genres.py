@@ -37,7 +37,7 @@ GENRES: list[Genre] = [
         "fps_kill", "FPS・キルシーンのみ", "🎯",
         "喋りの面白さより『映像の戦闘・撃ち合い・キルそのもの』を主役にする。発話が無くても"
         "『音の盛り上がり』のピーク（銃声・キル音・確キル）を最優先に選ぶ。1キル〜連続キルの見せ場を、"
-        "決着後のリアクション（歓声・雄叫び）まで含めて切る（目安18〜35秒。18秒未満は作らない）。"
+        "交戦の始まりから決着後のリアクション（歓声・雄叫び）まで丸ごと含めて切る。"
         "雑談・移動・漁りだけの区間は選ばない。",
         length=(18.0, 35.0), prefer_loud=True,
     ),
@@ -67,8 +67,7 @@ GENRES: list[Genre] = [
     Genre(
         "horror", "ホラー・ビックリ", "😱",
         "絶叫・ビクッと驚く・ジャンプスケアの瞬間。『音の盛り上がり』の急上昇（悲鳴）を最優先。"
-        "驚く直前の油断から、驚いた後のリアクション・ツッコミまでワンセットで切る"
-        "（目安18〜35秒。18秒未満は作らない）。",
+        "驚く直前の油断（フリ）から、驚いた後のリアクション・ツッコミが収まるまでワンセットで切る。",
         length=(18.0, 35.0), prefer_loud=True,
     ),
     Genre(
@@ -110,11 +109,11 @@ def build_block(
     if not genres:
         return "", max(HARD_MIN_SEC, default_min), default_max, False
     lines = [f"- {g.emoji} {g.label}: {g.guide}" for g in genres]
-    # 各ジャンルの希望尺（無指定は既定）を集計し、全体は [最小の下限, 最大の上限]。
+    # 下限は各ジャンルの希望を尊重、上限はかけない（length の max は目安として guide 文に残るのみ）。
+    # 旧実装はここで上限をかけていたため「規定レンジに収めるための機械的な 18 秒切り」が頻発した。
     mins = [(g.length[0] if g.length else default_min) for g in genres]
-    maxs = [(g.length[1] if g.length else default_max) for g in genres]
     eff_min = max(HARD_MIN_SEC, min(mins))
-    eff_max = max(maxs)
+    eff_max = default_max
     prefer_loud = any(g.prefer_loud for g in genres)
     names = "／".join(g.label for g in genres)
     block = (

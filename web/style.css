@@ -712,29 +712,14 @@ html { font-size: 108%; }
   padding: 8px 10px; background: rgba(37,244,238,.06); border: 1px dashed var(--accent-2); border-radius: 8px; }
 .sug-chip.used { opacity: .4; }
 
-/* ===== v0.8.0 ズーム区間（パンチイン） ===== */
-.ed-zoomz { position: absolute; left: 46px; right: 0; background: rgba(255,213,74,.14);
-  border: 1px dashed #ffd54a; border-left: 3px solid #ffd54a; box-sizing: border-box; z-index: 4;
-  display: flex; align-items: center; justify-content: center; gap: 6px; touch-action: none; cursor: grab; }
-.ed-zoomz:active { cursor: grabbing; }
-.ed-zoom-scale { background: rgba(0,0,0,.45); border: 1px solid #ffd54a; color: #ffd54a;
-  border-radius: 6px; font-size: .7rem; padding: 1px 7px; cursor: pointer; }
-.ed-zoom-del { position: absolute; top: 2px; right: 4px; background: none; border: none;
-  color: #ffd54a; font-size: .8rem; cursor: pointer; }
-.ed-zoomz .ed-cut-grip { position: absolute; left: 0; right: 0; height: 7px; cursor: ns-resize; }
-.ed-zoomz .ed-zoom-top { top: 0; } .ed-zoomz .ed-zoom-bot { bottom: 0; }
-#tab-detail .ed-zoom-scale { font-size: .8rem; }
 
-/* ===== v0.8.0 スタンプ ===== */
-.ed-stamp-pal { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
-.stamp-chip { font-size: 1.25rem; padding: 4px 8px; background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
-.stamp-chip:hover { border-color: var(--accent-2); }
-.ed-stamp-custom { width: 96px; padding: 6px 8px; background: var(--surface-2);
-  border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: .95rem; }
-.ed-stamp-chip { position: absolute; transform: translate(-50%, -50%); cursor: grab;
-  touch-action: none; user-select: none; z-index: 20; }
-.ed-stamp-chip:active { cursor: grabbing; }
-.ed-stamp-chip.sel { outline: 2px dashed var(--accent-2); outline-offset: 2px; }
-.ed-sel-stamp .ed-st-sc-l { flex: 1; min-width: 150px; }
-.ed-sel-stamp .ed-st-sc-l input[type=range] { flex: 1; }
+
+/* ===== 調整バー（スライダー）: 赤いバー＋白丸つまみ ===== */
+input[type=range] { -webkit-appearance: none; appearance: none; background: transparent;
+  height: 20px; cursor: pointer; }
+input[type=range]::-webkit-slider-runnable-track { height: 7px; border-radius: 4px;
+  background: linear-gradient(90deg, var(--accent), #ff5e7e); }
+input[type=range]::-webkit-slider-thumb { -webkit-appearance: none; appearance: none;
+  width: 17px; height: 17px; margin-top: -5px; border-radius: 50%;
+  background: #fff; border: 3px solid var(--accent); box-shadow: 0 1px 4px rgba(0,0,0,.45); }
+input[type=range]:hover::-webkit-slider-thumb { box-shadow: 0 0 0 4px rgba(255,45,85,.25); }

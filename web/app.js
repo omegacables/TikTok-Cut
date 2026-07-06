@@ -525,16 +525,20 @@ function _pvApplyEff(el, eff) {
   PV_EFFS.forEach(x => el.classList.remove('pv-eff-' + x));
   if (eff && eff !== 'none' && PV_EFFS.indexOf(eff) >= 0) el.classList.add('pv-eff-' + eff);
 }
-// stagger/typewriter/karaoke のチップ描画: 1文字ずつ<span>にして遅延アニメ（焼き込みの近似）
-function _pvCharSpans(text, maxChars, maxLines, mode, durSec) {
+// stagger/typewriter/karaoke のチップ描画: 1文字ずつ<span>にして遅延アニメ（焼き込みの近似）。
+// elapsedSec（テロップ開始からの経過秒）ぶん負の delay でずらす＝シーク位置でも途中経過が正しく見える。
+// 一時停止中は play-state: paused でその瞬間の状態のまま静止。
+function _pvCharSpans(text, maxChars, maxLines, mode, durSec, elapsedSec, playing) {
   const lines = _pvWrap(text, maxChars, maxLines);
   const total = Math.max(1, lines.join('').length);
+  const off = Math.round((elapsedSec || 0) * 1000);
+  const ps = ';animation-play-state:' + (playing ? 'running' : 'paused');
   let k = 0;
   const mk = ch => {
     let st = '';
-    if (mode === 'stagger') st = 'animation:pvChPop .15s ease-out both;animation-delay:' + Math.min(600, k * 45) + 'ms';
-    else if (mode === 'typewriter') st = 'animation:pvChShow 1ms steps(1) both;animation-delay:' + Math.min(600, k * 45) + 'ms';
-    else if (mode === 'karaoke') st = 'animation:pvChKara .12s linear both;animation-delay:' + Math.round(k * (Math.max(0.3, durSec) * 920 / total)) + 'ms';
+    if (mode === 'stagger') st = 'animation:pvChPop .15s ease-out both;animation-delay:' + (Math.min(600, k * 45) - off) + 'ms' + ps;
+    else if (mode === 'typewriter') st = 'animation:pvChShow 1ms steps(1) both;animation-delay:' + (Math.min(600, k * 45) - off) + 'ms' + ps;
+    else if (mode === 'karaoke') st = 'animation:pvChKara .12s linear both;animation-delay:' + (Math.round(k * (Math.max(0.3, durSec) * 920 / total)) - off) + 'ms' + ps;
     k++;
     return '<span class="pv-ch" style="' + st + '">' + esc(ch) + '</span>';
   };
@@ -613,8 +617,6 @@ function edSnapState(ed) {
     telops: edClone(ed._telops),
     sfx: (ed._sfx || []).map(b => ({ uid: b.uid, id: b.id, at: b.at, gain: b.gain, baked: b.baked })),
     cuts: (ed._cuts || []).map(c => ({ start: c.start, end: c.end })),
-    zooms: (ed._zooms || []).map(z => ({ start: z.start, end: z.end, scale: z.scale })),
-    stamps: (ed._stamps || []).map(s => ({ ...s })),
     keeps: ed._keeps ? ed._keeps.map(k => [k[0], k[1]]) : null,
     dur: ed._dur,
   };
@@ -636,13 +638,11 @@ function edApplyState(ed, st) {
   ed._telops = edClone(st.telops);
   ed._sfx = (st.sfx || []).map(b => ({ ...b }));
   ed._cuts = (st.cuts || []).map(c => ({ ...c }));
-  ed._zooms = (st.zooms || []).map(z => ({ ...z }));
-  ed._stamps = (st.stamps || []).map(s => ({ ...s }));
   ed._keeps = st.keeps ? st.keeps.map(k => [k[0], k[1]]) : null;
   if (st.dur != null) ed._dur = st.dur;
-  ed._selTelop = -1; ed._selSfx = null; ed._selSet = null; ed._selStamp = null;
+  ed._selTelop = -1; ed._selSfx = null; ed._selSet = null;
   edRenderTimeline(ed); edDrawWave(ed);
-  edRenderSelTelop(ed); edRenderSelSfx(ed); edRenderSelStamp(ed);
+  edRenderSelTelop(ed); edRenderSelSfx(ed);
   renderPreviewTelops(ed); updateEditorPreview(ed);
 }
 function edUndo(ed) {
@@ -714,7 +714,6 @@ function edRenderTimeline(ed) {
   edRenderTelopBlocks(ed);
   edRenderSfxBlocks(ed);
   edRenderCuts(ed);
-  edRenderZoomZones(ed);
 }
 function edRenderGutter(ed) {
   const g = ed.querySelector('.ed-tl-gutter'); if (!g) return;
@@ -937,120 +936,6 @@ async function edSuggestSfx(ed) {
   }
 }
 
-// ===== スタンプ（絵文字→PNG化してドラッグ配置・時間区間つき・保存時に焼き込み） =====
-const STAMP_EMOJIS = ['⭐', '😂', '🔥', '❗', '😱', '👏', '💯', '🎉', '💀', '👉'];
-function _emojiToPngBlob(emoji, size) {
-  size = size || 256;
-  return new Promise(res => {
-    const c = document.createElement('canvas'); c.width = c.height = size;
-    const ctx = c.getContext('2d');
-    ctx.font = Math.round(size * 0.78) + 'px "Segoe UI Emoji","Apple Color Emoji",sans-serif';
-    ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-    ctx.fillText(emoji, size / 2, size / 2 + size * 0.05);
-    c.toBlob(res, 'image/png');
-  });
-}
-async function edAddStamp(ed, emoji) {
-  emoji = (emoji || '').trim(); if (!emoji) return;
-  const st = ed.querySelector('.ed-status');
-  try {
-    const blob = await _emojiToPngBlob(emoji);
-    if (!blob) throw new Error('画像化に失敗しました');
-    const fd = new FormData(); fd.append('file', new File([blob], 'stamp.png', { type: 'image/png' }));
-    const r = await fetch('/api/clip/' + ed.dataset.job + '/' + ed.dataset.cid + '/stamp', { method: 'POST', body: fd });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || 'スタンプの登録に失敗しました');
-    const v = _clipVideo(ed); const t = v ? (v.currentTime || 0) : 0;
-    edPushUndo(ed);
-    const s = { uid: 'st' + (_uidN++), file: d.file, x: 0.5, y: 0.3, scale: 0.25, emoji,
-                start: +Math.max(0, t).toFixed(2), end: +Math.min(ed._dur || (t + 2), t + 2).toFixed(2) };
-    (ed._stamps = ed._stamps || []).push(s);
-    ed._selStamp = s.uid;
-    renderPreviewStamps(ed); edRenderSelStamp(ed);
-  } catch (e) { if (st) st.textContent = 'エラー: ' + e.message; }
-}
-function _stampKey(s) {
-  return JSON.stringify([s.file, +(+s.x).toFixed(3), +(+s.y).toFixed(3), +(+s.scale).toFixed(3), +s.start, +s.end]);
-}
-function renderPreviewStamps(ed) {
-  const frame = _edFrame(ed); if (!frame) return;
-  if (ed._stampDragging) return;   // ドラッグ中に再生成すると掴みが切れる
-  frame.querySelectorAll('.ed-stamp-chip').forEach(n => n.remove());
-  const v = _clipVideo(ed); const t = v ? (v.currentTime || 0) : 0;
-  const playing = v && !v.paused && !v.ended;
-  const baked = playing ? new Set(ed._stampsPristine || []) : null;
-  (ed._stamps || []).forEach(s => {
-    if (!(s.start <= t + 0.02 && t < s.end)) return;
-    if (baked && baked.has(_stampKey(s))) return;   // 焼き込み済みは動画側に任せる（二重表示防止）
-    const img = document.createElement('img');
-    img.className = 'ed-stamp-chip' + (s.uid === ed._selStamp ? ' sel' : '');
-    img.src = apiUrl('/api/download/' + ed.dataset.job + '/' + s.file);
-    img.style.left = (s.x * 100) + '%'; img.style.top = (s.y * 100) + '%';
-    img.style.width = (s.scale * 100) + '%';
-    img.draggable = false;
-    _wireStampChip(ed, img, s);
-    frame.appendChild(img);
-  });
-}
-function _wireStampChip(ed, img, s) {
-  let dragging = false, pushed = false;
-  img.addEventListener('pointerdown', e => {
-    dragging = true; pushed = false; ed._stampDragging = true; ed._selStamp = s.uid;
-    ed.querySelectorAll('.ed-stamp-chip').forEach(n => n.classList.toggle('sel', n === img));
-    edRenderSelStamp(ed);
-    try { img.setPointerCapture(e.pointerId); } catch (_) {}
-    e.preventDefault(); e.stopPropagation();
-  });
-  img.addEventListener('pointermove', e => {
-    if (!dragging) return;
-    if (!pushed) { pushed = true; edPushUndo(ed, 'stmove' + s.uid); }
-    const frame = _edFrame(ed); const r = frame.getBoundingClientRect();
-    s.x = +edClamp((e.clientX - r.left) / r.width, 0.02, 0.98).toFixed(3);
-    s.y = +edClamp((e.clientY - r.top) / r.height, 0.02, 0.98).toFixed(3);
-    img.style.left = (s.x * 100) + '%'; img.style.top = (s.y * 100) + '%';
-  });
-  const up = e => { if (!dragging) return; dragging = false; ed._stampDragging = false; try { img.releasePointerCapture(e.pointerId); } catch (_) {} };
-  img.addEventListener('pointerup', up); img.addEventListener('pointercancel', up);
-}
-function edRenderSelStamp(ed) {
-  const panel = ed.querySelector('.ed-sel-stamp'); if (!panel) return;
-  const s = (ed._stamps || []).find(x => x.uid === ed._selStamp);
-  if (!s) { panel.hidden = true; panel.innerHTML = ''; return; }
-  panel.hidden = false;
-  panel.innerHTML =
-    '<span class="ed-sel-cap">スタンプ ' + esc(s.emoji || '') + '（プレビュー上をドラッグで移動）</span>' +
-    '<label>開始<input class="ed-st-s" type="number" step="0.1" min="0" value="' + (+s.start).toFixed(1) + '"></label>' +
-    '<label>終了<input class="ed-st-e" type="number" step="0.1" min="0" value="' + (+s.end).toFixed(1) + '"></label>' +
-    '<label class="ed-st-sc-l">大きさ <b class="ed-st-sc-o">' + Math.round(s.scale * 100) + '</b>%' +
-      '<input type="range" class="ed-st-sc" min="8" max="70" step="2" value="' + Math.round(s.scale * 100) + '"></label>' +
-    '<button type="button" class="mini-btn ed-st-del">削除</button>';
-  if (!panel.dataset.wired) {
-    panel.dataset.wired = '1';
-    panel.addEventListener('input', e => {
-      const ss = (ed._stamps || []).find(x => x.uid === ed._selStamp); if (!ss) return;
-      if (e.target.classList.contains('ed-st-s')) { edPushUndo(ed, 'st-s'); ss.start = edClamp(+e.target.value || 0, 0, ed._dur || 0); }
-      else if (e.target.classList.contains('ed-st-e')) { edPushUndo(ed, 'st-e'); ss.end = edClamp(+e.target.value || 0, 0, ed._dur || 0); }
-      else if (e.target.classList.contains('ed-st-sc')) {
-        edPushUndo(ed, 'st-sc'); ss.scale = (+e.target.value || 25) / 100;
-        const o = panel.querySelector('.ed-st-sc-o'); if (o) o.textContent = e.target.value;
-      }
-      renderPreviewStamps(ed);
-    });
-    panel.addEventListener('click', e => {
-      if (!e.target.classList.contains('ed-st-del')) return;
-      const ss = (ed._stamps || []).find(x => x.uid === ed._selStamp); if (!ss) return;
-      edPushUndo(ed);
-      ed._stamps = ed._stamps.filter(x => x.uid !== ss.uid); ed._selStamp = null;
-      renderPreviewStamps(ed); edRenderSelStamp(ed);
-    });
-  }
-}
-function edWireStampPalette(ed) {
-  const pal = ed.querySelector('.ed-stamp-pal'); if (!pal) return;
-  pal.querySelectorAll('.stamp-chip').forEach(b => b.addEventListener('click', () => edAddStamp(ed, b.dataset.e)));
-  const add = pal.querySelector('.ed-stamp-add'), inp = pal.querySelector('.ed-stamp-custom');
-  if (add && inp) add.addEventListener('click', () => { edAddStamp(ed, inp.value); inp.value = ''; });
-}
 
 function edRenderSfxBlocks(ed) {
   const lane = ed.querySelector('.ed-tl-sfx'); if (!lane) return;
@@ -1320,7 +1205,6 @@ function edTlReset(btn) {
   const ed = btn.closest('.clip-editor'); if (!ed) return;
   edPushUndo(ed);   // 「初期に戻す」もCtrl+Zで取り消せる
   ed._selSet = null;
-  ed._zooms = [];
   ed._telops = edClone((ed._telopsOrig && ed._telopsOrig.length) ? ed._telopsOrig : ed._telopsPristine);
   ed._keeps = ed._keepsOrig ? ed._keepsOrig.map(k => [k[0], k[1]]) : null;   // 原状の残し区間
   ed._cuts = [];
@@ -1382,69 +1266,6 @@ function edAddCut(btn) {
   edRenderCuts(ed);
 }
 
-// ===== 区間パンチイン（🔍ズーム。指定区間だけ映像に寄る・保存時に焼き込み） =====
-const ED_ZOOM_SCALES = [1.1, 1.2, 1.3, 1.5];
-function edRenderZoomZones(ed) {
-  const tl = ed.querySelector('.ed-tl'); if (!tl) return;
-  tl.querySelectorAll('.ed-zoomz').forEach(n => n.remove());
-  (ed._zooms || []).forEach((z, i) => {
-    const top = edT2y(z.start), hh = Math.max(10, edT2y(z.end) - edT2y(z.start));
-    const el = document.createElement('div');
-    el.className = 'ed-zoomz'; el.style.top = top + 'px'; el.style.height = hh + 'px'; el.dataset.i = i;
-    el.innerHTML = '<div class="ed-cut-grip ed-zoom-top"></div>' +
-      '<button type="button" class="ed-zoom-scale" title="クリックで倍率を切替">🔍' + (+z.scale).toFixed(1) + 'x</button>' +
-      '<button type="button" class="ed-zoom-del" tabindex="-1">✕</button>' +
-      '<div class="ed-cut-grip ed-zoom-bot"></div>';
-    edWireZoomZone(ed, el, i);
-    tl.appendChild(el);
-  });
-}
-function edWireZoomZone(ed, el, i) {
-  let mode = null, startY = 0, z0s = 0, z0e = 0;
-  el.addEventListener('pointerdown', e => {
-    if (e.target.classList.contains('ed-zoom-del') || e.target.classList.contains('ed-zoom-scale')) return;
-    mode = e.target.classList.contains('ed-zoom-top') ? 'top' : e.target.classList.contains('ed-zoom-bot') ? 'bot' : 'move';
-    const z = ed._zooms[i]; z0s = z.start; z0e = z.end; startY = e.clientY;
-    el._snap0 = edSnapState(ed); el._pushed = false;
-    try { el.setPointerCapture(e.pointerId); } catch (_) {}
-    e.preventDefault(); e.stopPropagation();
-  });
-  el.addEventListener('pointermove', e => {
-    if (!mode) return;
-    const z = ed._zooms[i]; if (!z) return;
-    const dt = edSnap((e.clientY - startY) / ED_PX);
-    if (!el._pushed && dt !== 0) { el._pushed = true; edPushUndoSnap(ed, el._snap0 || edSnapState(ed)); ed._undoTag = null; }
-    if (mode === 'move') { const len = z0e - z0s; const s = edClamp(z0s + dt, 0, (ed._dur || 0) - len); z.start = +s.toFixed(2); z.end = +(s + len).toFixed(2); }
-    else if (mode === 'top') { z.start = +edMagnetT(ed, edClamp(z0s + dt, 0, z.end - 0.3), {}).toFixed(2); }
-    else { z.end = +edMagnetT(ed, edClamp(z0e + dt, z.start + 0.3, ed._dur || 0), {}).toFixed(2); }
-    el.style.top = edT2y(z.start) + 'px'; el.style.height = Math.max(10, edT2y(z.end) - edT2y(z.start)) + 'px';
-    edSeekVideo(ed, mode === 'bot' ? z.end : z.start);
-  });
-  const up = e => { if (!mode) return; mode = null; try { el.releasePointerCapture(e.pointerId); } catch (_) {} };
-  el.addEventListener('pointerup', up);
-  el.addEventListener('pointercancel', up);
-  el.querySelector('.ed-zoom-scale').addEventListener('click', e => {
-    e.stopPropagation();
-    const z = ed._zooms[i]; if (!z) return;
-    edPushUndo(ed, 'zscale' + i);
-    const cur = ED_ZOOM_SCALES.indexOf(+z.scale);
-    z.scale = ED_ZOOM_SCALES[(cur + 1) % ED_ZOOM_SCALES.length];
-    e.target.textContent = '🔍' + z.scale.toFixed(1) + 'x';
-  });
-  el.querySelector('.ed-zoom-del').addEventListener('click', e => {
-    e.stopPropagation(); edPushUndo(ed); ed._zooms.splice(i, 1); edRenderZoomZones(ed);
-  });
-}
-function edAddZoomZone(btn) {
-  const ed = btn.closest('.clip-editor'); if (!ed) return;
-  const v = _clipVideo(ed);
-  const s = edClamp(v ? (v.currentTime || 0) : 0, 0, Math.max(0, (ed._dur || 0) - 0.5));
-  const len = Math.min(2.0, Math.max(0.5, (ed._dur || 0) - s));
-  edPushUndo(ed);
-  (ed._zooms = ed._zooms || []).push({ start: +s.toFixed(2), end: +(s + len).toFixed(2), scale: 1.2 });
-  ed._zooms.sort((a, b) => a.start - b.start);
-  edRenderZoomZones(ed);
-}
 // カット(表示時間)を反映: telop/sfx を圧縮再配置し、backend用 keeps(元時間)＋新尺を返す
 function edApplyCuts(ed) {
   const cuts = (ed._cuts || []).filter(c => c.end > c.start + 0.01).sort((a, b) => a.start - b.start);
@@ -1473,14 +1294,10 @@ function edApplyCuts(ed) {
   (ed._telops || []).forEach(tp => { const r = compress(tp.start, tp.end); if (r) telops.push(Object.assign({}, tp, { start: r.start, end: r.end })); });
   const sfx = [];
   (ed._sfx || []).forEach(b => { const r = compress(b.at, b.at); if (r) sfx.push({ id: b.id, at: r.start, gain: b.gain }); });
-  const zooms = [];   // 🔍ズーム区間もカット後の時間軸へ再配置
-  (ed._zooms || []).forEach(z => { const r = compress(z.start, z.end); if (r && r.end > r.start + 0.1) zooms.push({ start: r.start, end: r.end, scale: z.scale }); });
-  const stamps = [];   // スタンプも同様に再配置
-  (ed._stamps || []).forEach(s => { const r = compress(s.start, s.end); if (r && r.end > r.start + 0.05) stamps.push({ file: s.file, emoji: s.emoji, x: s.x, y: s.y, scale: s.scale, start: r.start, end: r.end }); });
   const keeps = _dispKeepsToOrig(dispKeeps, ed._keeps, ed._origDur || dispDur);
   const removed = dispDur - dispKeeps.reduce((s, k) => s + (k[1] - k[0]), 0);
   const clip_duration = +dispKeeps.reduce((s, k) => s + (k[1] - k[0]), 0).toFixed(3);
-  return { telops, sfx, zooms, stamps, keeps, clip_duration, removed: +removed.toFixed(3) };
+  return { telops, sfx, keeps, clip_duration, removed: +removed.toFixed(3) };
 }
 function _invertRegions(cuts, dur) {   // カット区間の補集合（残す区間）[0,dur]
   const keeps = []; let pos = 0;
@@ -1989,7 +1806,7 @@ async function saveDetail(btn) {
                                 : 'カット範囲が短すぎます（0.1秒以上に）。';
       return;
     }
-    payload.telops = cut.telops; payload.sfx = cut.sfx; payload.zooms = cut.zooms; payload.stamps = cut.stamps;
+    payload.telops = cut.telops; payload.sfx = cut.sfx;
     payload.keeps = cut.keeps; payload.clip_duration = cut.clip_duration;
     cutReload = true;
   } else {
@@ -2101,11 +1918,6 @@ async function loadEditor(ed) {
       .then(w => { if (ed._loadGen === gen) { ed._peaks = w.peaks || []; edDrawWave(ed); } })
       .catch(() => {});
     // 部分カット用: 現在の残し区間（manifest keeps・元クリップ時間）と元クリップ尺
-    ed._zooms = (data.zooms || []).map(z => ({ start: +z.start || 0, end: +z.end || 0, scale: +z.scale || 1.2 }));
-    ed._stamps = (data.stamps || []).map(s => ({ uid: 'st' + (_uidN++), file: s.file, emoji: s.emoji || '',
-      x: +s.x || 0.5, y: +s.y || 0.35, scale: +s.scale || 0.25, start: +s.start || 0, end: +s.end || 0 }));
-    ed._stampsPristine = ed._stamps.map(_stampKey);   // 焼き込み済み＝再生中は重ねない
-    ed._selStamp = null;
     ed._keeps = data.keeps || null;
     ed._keepsOrig = data.keeps_orig || null;
     ed._origDur = (data.end != null && data.start != null) ? (+data.end - +data.start) : (ed._dur || 0);
@@ -2186,7 +1998,6 @@ async function loadEditor(ed) {
             '<span class="ed-zoom-o">' + Math.round(ED_PX / 80 * 100) + '%</span>' +
             '<button type="button" class="mini-btn" onclick="edZoomBtn(this,1)">＋</button></span>' +
           '<button type="button" class="mini-btn" onclick="edAddCut(this)" title="再生位置にカット範囲を追加。やり直すときはカット範囲の✕で個別取消、または「初期に戻す」で全部戻せます">✂ カット範囲</button>' +
-          '<button type="button" class="mini-btn" onclick="edAddZoomZone(this)" title="再生位置にズーム区間を追加（盛り上がりで映像に寄る演出・保存時に焼き込み）">🔍 ズーム区間</button>' +
           '<button type="button" class="mini-btn" onclick="edTlReset(this)" title="字幕・カットを生成直後の状態に戻します（カットしすぎたときもこれで元に戻せます）">初期に戻す</button>' +
           '<select class="ed-bulk-anim" onchange="edBulkAnim(this)">' +
             '<option value="">全テロップのアニメ…</option>' + optionsHtml(ANIM_OPTS, '_skip_') + '</select>' +
@@ -2194,11 +2005,6 @@ async function loadEditor(ed) {
       '</div>' +
       '<div class="ed-sfx-pal"></div>' +
       '<div class="ed-sfx-sug" hidden></div>' +
-      '<div class="ed-stamp-pal"><span class="ed-pal-lbl">スタンプ（再生位置に2秒表示・プレビュー上をドラッグで移動）:</span>' +
-        STAMP_EMOJIS.map(e => '<button type="button" class="stamp-chip" data-e="' + e + '">' + e + '</button>').join('') +
-        '<input type="text" class="ed-stamp-custom" maxlength="8" placeholder="他の絵文字">' +
-        '<button type="button" class="mini-btn ed-stamp-add">追加</button></div>' +
-      '<div class="ed-sel-stamp" hidden></div>' +
       '<div class="ed-tl-colhead"><span></span><span>字幕</span><span>効果音</span></div>' +
       '<div class="ed-tl-wrap"><div class="ed-tl">' +
         '<div class="ed-tl-gutter"></div>' +
@@ -2244,7 +2050,6 @@ async function loadEditor(ed) {
     edWireZoom(ed);
     edSyncUndoBtns(ed);
     edDrawWave(ed);
-    edWireStampPalette(ed);    // スタンプ絵文字パレット
     // 字幕タイミング スライダー（per-clip・プレビュー即反映）
     (function () {
       const sr = ed.querySelector('.ed-suboff-range'), sv = ed.querySelector('.ed-suboff-val');
@@ -2329,7 +2134,6 @@ function _syncTitleChipVis(ed) {
 // 保存成功後: 現在の編集状態を「焼き込み済み」として記録（以後、再生中は同一内容のチップを隠す）
 function _markSavedState(ed) {
   ed._telopsPristine = _subClone(ed._telops || []);
-  ed._stampsPristine = (ed._stamps || []).map(_stampKey);   // スタンプも焼き込み済み扱いに
   ed._title0 = {
     t: ((ed.querySelector('.ed-title') || {}).value || '').trim(),
     sz: +((ed.querySelector('.ed-ttlsz') || {}).value) || 0,
@@ -2443,10 +2247,21 @@ function renderPreviewTelops(ed, replay, opts) {
   const capOl = (() => { const e = ed.querySelector('.ed-capol'); const n = e ? +e.value : NaN; return isNaN(n) ? 6 : n; })();
   const ff = pv.font ? `'${pv.font}', sans-serif` : 'sans-serif';
   const soff = +ed._subOffset || 0;   // 字幕タイミング（プレビューを実描画に合わせてずらす）
+  const vPlaying = !!(v && !v.paused && !v.ended);
+  // 表示開始時刻を記録＝時間窓に入った瞬間に入場アニメを再生し、直後の再描画でも
+  // 負の animation-delay で続きから継続させる（timeupdate 再描画でアニメが消えない）。
+  const nowMs = performance.now();
+  const prevShownAt = (!opts.frame && ed._pvShownAt) || new Map();
+  const shownAt = new Map();
   telops.forEach((tp, ti) => {
     if (!tp.text || !tp.text.trim()) return;
     if (!(tp.start + soff <= t + 0.02 && t < tp.end + soff)) return;   // アクティブなテロップのみ（offset反映）
     if (burnedKeys && burnedKeys.has(_tpKey(tp))) return;   // 再生中: 焼き込み済みは動画側に任せる
+    const isNew = !prevShownAt.has(tp);
+    // replay=アニメ変更時は時計をリセット＝直後の再描画（seek/timeupdate）でも最後まで再生される
+    shownAt.set(tp, (isNew || replay) ? nowMs : prevShownAt.get(tp));
+    const animAge = (nowMs - shownAt.get(tp)) / 1000;   // 表示されてからの秒数
+    const elapsed = Math.max(0, t - (tp.start + soff));
     // 位置の既定値は実描画（build_ass）の既定と一致させる（強調=中央/アラート=上部バナー/笑い=右中段）
     const pos = tp.pos || (tp.emphasis ? { x: 0.5, y: 0.5 }
       : tp.style === 'alert' ? { x: 0.5, y: 0.33 }
@@ -2467,15 +2282,15 @@ function renderPreviewTelops(ed, replay, opts) {
     const plain = !tp.style && !tp.emphasis;
     const wr = plain ? capW : 0.66;
     const maxCh = Math.max(4, Math.floor(1080 * wr / size));
-    // カラオケ/1文字入場は replay 時のみ文字spanで近似（timeupdate毎の再生成でチラつかせない）
+    // カラオケ/1文字入場は常に文字spanで描画（経過時間ぶん負delay＝シーク位置でも途中経過が正しい）
     const karaOn = plain && !!(ed.querySelector('.ed-kara') || {}).checked;
     const chAnim = plain ? ((tp.animation || clipAnim) === 'stagger' ? 'stagger'
       : (tp.animation || clipAnim) === 'typewriter' ? 'typewriter' : '') : '';
-    if (replay && karaOn) {
+    if (karaOn) {
       chip.style.setProperty('--pv-kara', pv.hl || '#FFE600');
-      chip.innerHTML = _pvCharSpans(tp.text, maxCh, 2, 'karaoke', (tp.end - tp.start));
-    } else if (replay && chAnim) {
-      chip.innerHTML = _pvCharSpans(tp.text, maxCh, 2, chAnim, (tp.end - tp.start));
+      chip.innerHTML = _pvCharSpans(tp.text, maxCh, 2, 'karaoke', (tp.end - tp.start), replay ? 0 : elapsed, vPlaying || replay);
+    } else if (chAnim) {
+      chip.innerHTML = _pvCharSpans(tp.text, maxCh, 2, chAnim, (tp.end - tp.start), replay ? 0 : elapsed, vPlaying || replay);
     } else {
       chip.innerHTML = _pvWrapHtml(tp.text, maxCh, 2);
     }
@@ -2498,14 +2313,20 @@ function renderPreviewTelops(ed, replay, opts) {
     }
     // クリップのエフェクトを静的に反映（入場アニメは付けずチラつき回避）
     _pvApplyEff(chip, ((ed.querySelector('.ed-effect') || {}).value) || 'none');
-    if (replay && !tp.emphasis) {   // アニメ変更時に入場アニメを再生
+    // 入場アニメ: アニメ変更時（replay）と、時間窓に入った直後は再生。
+    // 再描画で作り直されても animAge ぶん負のdelayを付けて「続きから」見せる（消えない）。
+    if (!tp.emphasis) {
       const cfg = PV_ANIM[tp.animation || clipAnim] || PV_ANIM.default;
-      if (cfg.name) { void chip.offsetWidth; chip.style.animation = `${cfg.name} ${cfg.dur}s ease-out ${cfg.iter || '1'} both`; }
+      const loop = cfg.iter === 'infinite';
+      if (cfg.name && (loop || animAge < (cfg.dur || 0))) {
+        chip.style.animation = `${cfg.name} ${cfg.dur}s ease-out ${cfg.iter || '1'} both`;
+        if (animAge > 0) chip.style.animationDelay = (-animAge).toFixed(3) + 's';
+      }
     }
     if (!noDrag) _attachTelopChipDrag(ed, chip, ti);
     frame.appendChild(chip);
   });
-  if (!opts.frame) renderPreviewStamps(ed);   // スタンプも再生位置に同期して表示
+  if (!opts.frame) ed._pvShownAt = shownAt;
 }
 function _attachTelopChipDrag(ed, chip, ti) {
   const frame = _edFrame(ed);
@@ -2750,9 +2571,6 @@ function _editorPayload(ed) {
   const rf = ed.querySelector('.ed-reframe'); if (rf) out.reframe = rf.value;          // 画面構成
   const lb = ed.querySelector('.ed-lb-color'); if (lb) out.letterbox_color = lb.value;  // 帯の色
   if (ed._subOffset != null) out.sub_offset = +ed._subOffset || 0;                     // 字幕タイミング
-  out.zooms = (ed._zooms || []).map(z => ({ start: +(+z.start).toFixed(2), end: +(+z.end).toFixed(2), scale: +z.scale }));   // 🔍ズーム区間
-  out.stamps = (ed._stamps || []).map(s => ({ file: s.file, emoji: s.emoji, x: s.x, y: s.y, scale: s.scale,
-    start: +(+s.start).toFixed(2), end: +(+s.end).toFixed(2) }));   // スタンプ
   return out;
 }
 async function saveClip(btn) {

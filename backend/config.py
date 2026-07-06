@@ -310,7 +310,8 @@ class Settings:
     # クリップ条件（TikTok の最適尺）。max は「内容が本当に続く場合」の上限＝5分。
     # （短すぎるクランプは「良い所の手前」で切れる事故になるため余裕を持たせる）
     clip_min_sec: float = 18.0
-    clip_max_sec: float = 300.0
+    # 尺の上限は実質無制限（話が完結するまで切らせる）。動画長でクランプされる安全弁のみ。
+    clip_max_sec: float = 3600.0
     default_clip_count: int = 5
 
     # 9:16 リフレーム方式: "crop"(中央クロップ=全画面) / "letterbox"(上下黒帯) / "blur"(背景ぼかし)

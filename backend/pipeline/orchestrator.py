@@ -121,20 +121,18 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
     logo = m.get("logo") or {}
     logo_arg = logo if logo.get("path") else None
 
-    zooms = m.get("zooms") or None   # 区間パンチイン（🔍ズーム）
-
     def _render(logo_use, *, intro_use=intro, force_cpu=False):
         if keeps:
             render.render_clip_segments(
                 input_video, float(m["start"]), [tuple(k) for k in keeps], ass,
                 out_mp4, reframe_mode=m.get("reframe"), intro=intro_use,
-                letterbox_color=lb_color, logo=logo_use, zooms=zooms, force_cpu=force_cpu,
+                letterbox_color=lb_color, logo=logo_use, force_cpu=force_cpu,
             )
         else:
             render.render_clip(
                 input_video, float(m["start"]), float(m["end"]), ass,
                 out_mp4, reframe_mode=m.get("reframe"), intro=intro_use,
-                letterbox_color=lb_color, logo=logo_use, zooms=zooms, force_cpu=force_cpu,
+                letterbox_color=lb_color, logo=logo_use, force_cpu=force_cpu,
             )
 
     def _first_line(err):
@@ -175,10 +173,6 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
     # 効果音（タイムラインで配置・任意）を amix で焼き込む（base 音量は維持）。
     # ロゴ/キャラと違い、ユーザーが明示配置した「音」なので失敗は握り潰さず伝播させる
     # （update_clip が 500 を返し、UI 表示と書き出しの不一致＝サイレント失敗を防ぐ）。
-    # スタンプ（絵文字/画像の時間区間オーバーレイ・任意）
-    stamps = m.get("stamps") or []
-    if stamps:
-        render.apply_stamps(out_mp4, stamps, job_dir)
     sfx_items = m.get("sfx") or []
     if sfx_items:
         sfx.apply_sfx(out_mp4, sfx_items, clip_duration=float(m["clip_duration"]))

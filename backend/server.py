@@ -495,26 +495,8 @@ def get_clip(job: str, cid: int):
             "start": m.get("start"), "end": m.get("end"),               # 元クリップ範囲（カット計算用）
             "sub_offset": m.get("sub_offset", 0.0),
             "intro": m.get("intro", "none"), "sfx": m.get("sfx", []),
-            "zooms": m.get("zooms", []), "stamps": m.get("stamps", []),
             "clip_duration": m.get("clip_duration", 0.0),
             "reframe": m.get("reframe", "crop"), "letterbox_color": m.get("letterbox_color", "#000000")}
-
-
-@app.post("/api/clip/{job}/{cid}/stamp")
-def stamp_upload(job: str, cid: int, file: UploadFile = File(...)):
-    """スタンプPNG（フロントで絵文字をcanvas描画したもの/任意画像）をジョブフォルダへ保存。"""
-    job_dir = _job_dir(job)
-    if not job_dir.exists():
-        raise HTTPException(404, "ジョブが見つかりません")
-    name = f"stamp_{uuid.uuid4().hex[:10]}.png"
-    dest = job_dir / name
-    data = file.file.read(3 * 1024 * 1024 + 1)
-    if len(data) > 3 * 1024 * 1024:
-        raise HTTPException(400, "画像が大きすぎます（3MBまで）")
-    if not data.startswith(b"\x89PNG"):
-        raise HTTPException(400, "PNG画像のみ対応しています")
-    dest.write_bytes(data)
-    return {"ok": True, "file": name}
 
 
 @app.post("/api/clip/{job}/{cid}/sfx_suggest")
@@ -640,45 +622,6 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
             except (TypeError, ValueError):
                 continue
         m["sfx"] = items
-
-    # スタンプ（絵文字/画像オーバーレイ）: [{file,x,y,scale,start,end}]。空リストで解除。
-    if isinstance(payload.get("stamps"), list):
-        sl = []
-        for s in payload["stamps"]:
-            if not isinstance(s, dict) or not s.get("file"):
-                continue
-            fn = Path(str(s["file"])).name   # ファイル名のみ受ける（パストラバーサル防止）
-            if not (fn.startswith("stamp_") and fn.endswith(".png")):
-                continue
-            try:
-                a = max(0.0, float(s.get("start", 0)))
-                b = float(s.get("end", 0))
-                if b <= a + 0.05:
-                    continue
-                sl.append({"file": fn, "emoji": str(s.get("emoji", ""))[:8],
-                           "x": max(0.0, min(1.0, float(s.get("x", 0.5)))),
-                           "y": max(0.0, min(1.0, float(s.get("y", 0.35)))),
-                           "scale": max(0.05, min(0.9, float(s.get("scale", 0.25)))),
-                           "start": round(a, 3), "end": round(b, 3)})
-            except (TypeError, ValueError):
-                continue
-        m["stamps"] = sl
-
-    # 区間パンチイン（🔍ズーム）: [{start,end,scale}] の配置リスト。空リストで解除。
-    if isinstance(payload.get("zooms"), list):
-        zl = []
-        for z in payload["zooms"]:
-            if not isinstance(z, dict):
-                continue
-            try:
-                a = max(0.0, float(z.get("start", 0)))
-                b = float(z.get("end", 0))
-                sc = max(1.02, min(1.6, float(z.get("scale", 1.2))))
-            except (TypeError, ValueError):
-                continue
-            if b > a + 0.1:
-                zl.append({"start": round(a, 3), "end": round(b, 3), "scale": round(sc, 2)})
-        m["zooms"] = zl
 
     # 部分カット（残し区間 keeps＝元クリップ時間の[a,b]）。null/空でカット解除（全区間）。
     # フロントは telops/sfx を圧縮時間に再配置済みで送る。clip_duration は keeps から再計算。
