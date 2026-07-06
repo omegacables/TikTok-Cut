@@ -35,11 +35,6 @@ sfx_dir = os.path.join(ROOT, "assets", "sfx")
 if os.path.isdir(sfx_dir):
     datas.append((sfx_dir, os.path.join("assets", "sfx")))
 
-# 同梱BGM（_internal/assets/bgm → config.BGM_DIR で解決）
-bgm_dir = os.path.join(ROOT, "assets", "bgm")
-if os.path.isdir(bgm_dir):
-    datas.append((bgm_dir, os.path.join("assets", "bgm")))
-
 # ffmpeg を同梱（軽量 essentials を優先。ffprobe は廃止し ffmpeg で尺取得）
 ffmpeg_local = os.path.join(ROOT, "packaging", "ffmpeg", "ffmpeg.exe")
 if os.path.exists(ffmpeg_local):

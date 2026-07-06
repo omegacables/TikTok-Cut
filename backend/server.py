@@ -23,9 +23,8 @@ from fastapi import Body, FastAPI, File, Form, HTTPException, Request, UploadFil
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
-from .config import (BGM_DIR, FONTS, FONTS_DIR, OUTPUT_ROOT, PREFS_FILE, PROJECT_DIR,
-                     SETTINGS, SFX, SFX_DIR, USER_BGM_DIR, USER_SFX_DIR,
-                     all_bgm, all_sfx, bgm_path, sfx_path, valid_font)
+from .config import (FONTS, FONTS_DIR, OUTPUT_ROOT, PREFS_FILE, PROJECT_DIR, SETTINGS,
+                     SFX, SFX_DIR, valid_font)
 from .pipeline.orchestrator import render_from_manifest, run_job
 
 # UI(web) は TIKTOKCUT_WEB があればそこから配信（Electron 側更新だけで UI 差し替え可能）。
@@ -136,9 +135,6 @@ if FONTS_DIR.exists():
 if SFX_DIR.exists():
     # 効果音タイムライン UI の試聴用に同梱効果音を配信
     app.mount("/sfx", StaticFiles(directory=str(SFX_DIR)), name="sfx")
-if BGM_DIR.exists():
-    # BGM の試聴用に同梱曲を配信
-    app.mount("/bgm", StaticFiles(directory=str(BGM_DIR)), name="bgm")
 
 
 @app.get("/api/fonts")
@@ -148,130 +144,7 @@ def fonts_list():
 
 @app.get("/api/sfx")
 def sfx_list():
-    """同梱＋ユーザー効果音。url は試聴用（同梱は /sfx 静的、ユーザーは専用エンドポイント）。"""
-    out = []
-    for s in all_sfx():
-        d = dict(s)
-        d["url"] = ("/api/sfx/audio/" + d["id"]) if d["id"].startswith("u_") else ("/sfx/" + d["file"])
-        if d["id"].startswith("u_"):
-            d.pop("file", None)   # ユーザーの絶対パスは外に出さない
-        out.append(d)
-    return out
-
-
-@app.get("/api/sfx/audio/{sid}")
-def sfx_audio(sid: str):
-    p = sfx_path(sid)
-    if not p:
-        raise HTTPException(404, "効果音が見つかりません")
-    return FileResponse(str(p))
-
-
-@app.post("/api/sfx/upload")
-def sfx_upload(file: UploadFile = File(...)):
-    """ユーザー効果音の追加（mp3/wav等 → 出力フォルダ内「効果音（追加）」へ保存）。"""
-    name = Path(file.filename or "sound.mp3").name
-    ext = Path(name).suffix.lower()
-    if ext not in (".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac"):
-        raise HTTPException(400, "対応形式は mp3 / wav / m4a / ogg / aac / flac です")
-    USER_SFX_DIR.mkdir(parents=True, exist_ok=True)
-    # 上書きしない（同名は連番）
-    dest = USER_SFX_DIR / name
-    n = 2
-    while dest.exists():
-        dest = USER_SFX_DIR / f"{Path(name).stem}_{n}{ext}"
-        n += 1
-    size = 0
-    with open(dest, "wb") as f:
-        while True:
-            chunk = file.file.read(1 << 20)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > 20 * 1024 * 1024:   # 20MB上限（効果音想定）
-                f.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(400, "ファイルが大きすぎます（20MBまで）")
-            f.write(chunk)
-    return {"ok": True, "sfx": sfx_list()}
-
-
-@app.delete("/api/sfx/{sid}")
-def sfx_delete(sid: str):
-    """ユーザー効果音の削除（u_ のみ・同梱は不可）。"""
-    if not sid.startswith("u_"):
-        raise HTTPException(400, "同梱の効果音は削除できません")
-    p = sfx_path(sid)
-    if not p:
-        raise HTTPException(404, "効果音が見つかりません")
-    try:
-        Path(p).unlink()
-    except OSError as e:
-        raise HTTPException(500, f"削除に失敗しました: {e}")
-    return {"ok": True, "sfx": sfx_list()}
-
-
-# ===== BGM（同梱ループ＋ユーザー曲） =====
-@app.get("/api/bgm")
-def bgm_list():
-    out = []
-    for b in all_bgm():
-        d = dict(b)
-        d["url"] = ("/api/bgm/audio/" + d["id"]) if d["id"].startswith("u_") else ("/bgm/" + d["file"])
-        if d["id"].startswith("u_"):
-            d.pop("file", None)
-        out.append(d)
-    return out
-
-
-@app.get("/api/bgm/audio/{bid}")
-def bgm_audio(bid: str):
-    p = bgm_path(bid)
-    if not p:
-        raise HTTPException(404, "BGMが見つかりません")
-    return FileResponse(str(p))
-
-
-@app.post("/api/bgm/upload")
-def bgm_upload(file: UploadFile = File(...)):
-    """ユーザーBGMの追加（出力フォルダ内「BGM（追加）」へ保存・50MBまで）。"""
-    name = Path(file.filename or "bgm.mp3").name
-    ext = Path(name).suffix.lower()
-    if ext not in (".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac"):
-        raise HTTPException(400, "対応形式は mp3 / wav / m4a / ogg / aac / flac です")
-    USER_BGM_DIR.mkdir(parents=True, exist_ok=True)
-    dest = USER_BGM_DIR / name
-    n = 2
-    while dest.exists():
-        dest = USER_BGM_DIR / f"{Path(name).stem}_{n}{ext}"
-        n += 1
-    size = 0
-    with open(dest, "wb") as f:
-        while True:
-            chunk = file.file.read(1 << 20)
-            if not chunk:
-                break
-            size += len(chunk)
-            if size > 50 * 1024 * 1024:
-                f.close()
-                dest.unlink(missing_ok=True)
-                raise HTTPException(400, "ファイルが大きすぎます（50MBまで）")
-            f.write(chunk)
-    return {"ok": True, "bgm": bgm_list()}
-
-
-@app.delete("/api/bgm/{bid}")
-def bgm_delete(bid: str):
-    if not bid.startswith("u_"):
-        raise HTTPException(400, "同梱のBGMは削除できません")
-    p = bgm_path(bid)
-    if not p:
-        raise HTTPException(404, "BGMが見つかりません")
-    try:
-        Path(p).unlink()
-    except OSError as e:
-        raise HTTPException(500, f"削除に失敗しました: {e}")
-    return {"ok": True, "bgm": bgm_list()}
+    return SFX
 
 
 @app.get("/api/prefs")
@@ -622,7 +495,7 @@ def get_clip(job: str, cid: int):
             "start": m.get("start"), "end": m.get("end"),               # 元クリップ範囲（カット計算用）
             "sub_offset": m.get("sub_offset", 0.0),
             "intro": m.get("intro", "none"), "sfx": m.get("sfx", []),
-            "bgm": m.get("bgm"), "zooms": m.get("zooms", []), "stamps": m.get("stamps", []),
+            "zooms": m.get("zooms", []), "stamps": m.get("stamps", []),
             "clip_duration": m.get("clip_duration", 0.0),
             "reframe": m.get("reframe", "crop"), "letterbox_color": m.get("letterbox_color", "#000000")}
 
@@ -652,7 +525,7 @@ def clip_sfx_suggest(job: str, cid: int):
         raise HTTPException(404, "クリップ情報が見つかりません")
     m = _load_manifest(mf, required=("id",))
     from .pipeline import highlight
-    items = highlight.suggest_sfx(m.get("telops") or [], all_sfx(),
+    items = highlight.suggest_sfx(m.get("telops") or [], SFX,
                                   float(m.get("clip_duration") or 0))
     return {"suggestions": items}
 
@@ -767,23 +640,6 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
             except (TypeError, ValueError):
                 continue
         m["sfx"] = items
-
-    # BGM（トラック・音量・フェード・ダッキング）。null で解除。
-    if "bgm" in payload:
-        b = payload["bgm"]
-        if isinstance(b, dict) and b.get("id"):
-            def _bf(v, lo, hi, d):
-                try:
-                    return max(lo, min(hi, float(v)))
-                except (TypeError, ValueError):
-                    return d
-            m["bgm"] = {"id": str(b["id"]),
-                        "gain": _bf(b.get("gain"), 0.0, 1.5, 0.25),
-                        "fade_in": _bf(b.get("fade_in"), 0.0, 5.0, 1.0),
-                        "fade_out": _bf(b.get("fade_out"), 0.0, 5.0, 1.5),
-                        "duck": bool(b.get("duck", True))}
-        else:
-            m["bgm"] = None
 
     # スタンプ（絵文字/画像オーバーレイ）: [{file,x,y,scale,start,end}]。空リストで解除。
     if isinstance(payload.get("stamps"), list):

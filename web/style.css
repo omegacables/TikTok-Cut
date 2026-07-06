@@ -762,8 +762,6 @@ html { font-size: 108%; }
 /* ===== v0.8.0 エディタUX（Undo/ズーム/波形/磁石/複数選択） ===== */
 .ed-tl-wave { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
 .ed-block.msel { outline: 2px dashed #ffd54a; outline-offset: 1px; }
-.ed-magnet { opacity: .45; }
-.ed-magnet.on { opacity: 1; border-color: var(--accent-2); color: var(--accent-2); }
 .ed-undo:disabled, .ed-redo:disabled { opacity: .35; cursor: default; }
 .ed-zoom-ctl { display: inline-flex; align-items: center; gap: 4px; }
 .ed-zoom-ctl .ed-zoom-o { font-size: .72rem; color: var(--muted); min-width: 38px; text-align: center; }
@@ -799,24 +797,6 @@ html { font-size: 108%; }
   border-radius: 10px; font-size: .95rem; cursor: pointer; transition: border-color .15s, transform .1s; }
 .tpl-chip:hover { border-color: var(--accent-2); transform: translateY(-1px); }
 .tpl-chip.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
-
-/* ===== v0.8.0 効果音パレット（カテゴリ・追加・削除） ===== */
-.ed-pal-cat { flex-basis: 100%; font-size: .68rem; color: var(--accent-2); margin-top: 4px; }
-#tab-detail .ed-pal-cat { font-size: .78rem; }
-.sfx-udel { margin-left: 6px; color: var(--muted); font-weight: 700; }
-.sfx-udel:hover { color: var(--accent); }
-.ed-sfx-add { border-style: dashed; }
-
-/* ===== v0.8.0 BGM ===== */
-.ed-bgm { margin: 8px 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; }
-.ed-bgm-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
-.ed-bgm-sel { flex: 1; min-width: 160px; }
-.ed-bgm-opts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
-.ed-bgm-opts label { display: inline-flex; align-items: center; gap: 5px; font-size: .72rem; color: var(--muted); }
-#tab-detail .ed-bgm-opts label { font-size: .82rem; }
-.ed-bgm-gain-l { flex: 1; min-width: 160px; }
-.ed-bgm-gain-l input[type=range] { flex: 1; }
-.ed-bgm-fi, .ed-bgm-fo { width: 58px; }
 
 /* ===== v0.8.0 AI効果音サジェスト ===== */
 .ed-sfx-sug { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0;

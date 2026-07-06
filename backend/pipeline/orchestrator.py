@@ -182,10 +182,6 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
     sfx_items = m.get("sfx") or []
     if sfx_items:
         sfx.apply_sfx(out_mp4, sfx_items, clip_duration=float(m["clip_duration"]))
-    # BGM（任意）。効果音と同じく明示指定なので失敗は伝播させる。
-    bgm = m.get("bgm")
-    if isinstance(bgm, dict) and bgm.get("id"):
-        sfx.apply_bgm(out_mp4, bgm, clip_duration=float(m["clip_duration"]))
     thumb = job_dir / f"clip_{i:02d}.jpg"
     try:
         render.make_thumbnail(out_mp4, thumb, at=max(1.0, float(m["clip_duration"]) * 0.45))

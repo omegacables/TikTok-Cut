@@ -665,14 +665,8 @@ function edSyncUndoBtns(ed) {
 function edUndoBtn(btn) { const ed = btn.closest('.clip-editor'); if (ed) edUndo(ed); }
 function edRedoBtn(btn) { const ed = btn.closest('.clip-editor'); if (ed) edRedo(ed); }
 
-// --- 磁石スナップ（他ブロック端・カット端・再生位置に吸着） ---
-function edToggleMagnet(btn) {
-  const ed = btn.closest('.clip-editor'); if (!ed) return;
-  ed._magnet = ed._magnet === false;
-  btn.classList.toggle('on', ed._magnet !== false);
-}
+// --- 磁石スナップ（常時ON。8px相当以内に近づいた時だけ吸着＝それ以外は自由配置） ---
 function edMagnetT(ed, t, opts) {
-  if (ed._magnet === false) return t;
   opts = opts || {};
   const thr = 8 / ED_PX;   // 8px相当以内で吸着
   let best = null, bd = thr;
@@ -897,36 +891,16 @@ function edWireSelTelop(ed) {
   });
 }
 // --- 効果音レーン ---
-const SFX_CATS = { comedy: '😂 コメディ', impact: '💥 インパクト', system: '🔔 システム', user: '🎵 追加した効果音' };
 function edRenderSfxPalette(ed) {
   const pal = ed.querySelector('.ed-sfx-pal'); if (!pal) return;
   const list = Object.values(ed._sfxById || {});
-  const byCat = {};
-  list.forEach(s => { const c = s.cat || 'comedy'; (byCat[c] = byCat[c] || []).push(s); });
-  let h = '<span class="ed-pal-lbl">効果音を追加（再生位置に）:</span>';
-  Object.keys(SFX_CATS).forEach(cat => {
-    if (!byCat[cat] || !byCat[cat].length) return;
-    h += '<span class="ed-pal-cat">' + SFX_CATS[cat] + '</span>' + byCat[cat].map(s =>
-      '<button type="button" class="sfx-chip" data-id="' + esc(s.id) + '">' + (s.emoji ? s.emoji + ' ' : '') + esc(s.label || s.id) +
-      '<span class="sfx-dur">' + (+s.dur || 0).toFixed(1) + 's</span>' +
-      (s.id.indexOf('u_') === 0 ? '<span class="sfx-udel" title="この効果音をパソコンから削除">✕</span>' : '') +
-      '</button>').join('');
-  });
-  h += '<button type="button" class="mini-btn ed-sfx-add" title="mp3/wav などの音声ファイルを自分の効果音として追加します">＋効果音を追加</button>' +
-       '<input type="file" class="ed-sfx-file" accept=".mp3,.wav,.m4a,.ogg,.aac,.flac,audio/*" hidden>' +
-       '<button type="button" class="mini-btn ed-sfx-sug-btn" title="字幕の内容から効果音を入れる場所をAIが提案します">🤖 AI提案</button>';
-  pal.innerHTML = h;
+  pal.innerHTML = '<span class="ed-pal-lbl">効果音を追加（再生位置に）:</span>' + list.map(s =>
+    '<button type="button" class="sfx-chip" data-id="' + esc(s.id) + '">' + (s.emoji ? s.emoji + ' ' : '') + esc(s.label || s.id) +
+    '<span class="sfx-dur">' + (+s.dur || 0).toFixed(1) + 's</span></button>').join('') +
+    '<button type="button" class="mini-btn ed-sfx-sug-btn" title="字幕の内容から効果音を入れる場所をAIが提案します">🤖 AI提案</button>';
+  pal.querySelectorAll('.sfx-chip').forEach(b => b.addEventListener('click', () => edAddSfxAtPlayhead(ed, b.dataset.id)));
   const sug = pal.querySelector('.ed-sfx-sug-btn');
   if (sug) sug.addEventListener('click', () => edSuggestSfx(ed));
-  pal.querySelectorAll('.sfx-chip').forEach(b => b.addEventListener('click', e => {
-    if (e.target.classList.contains('sfx-udel')) { e.stopPropagation(); edDeleteUserSfx(ed, b.dataset.id); return; }
-    edAddSfxAtPlayhead(ed, b.dataset.id);
-  }));
-  const add = pal.querySelector('.ed-sfx-add'), fi = pal.querySelector('.ed-sfx-file');
-  if (add && fi) {
-    add.addEventListener('click', () => fi.click());
-    fi.addEventListener('change', () => { if (fi.files && fi.files[0]) { edUploadSfx(ed, fi.files[0]); fi.value = ''; } });
-  }
 }
 // AI効果音サジェスト: テロップ内容から配置候補をもらい、チップのワンタップで採用
 async function edSuggestSfx(ed) {
@@ -1078,107 +1052,6 @@ function edWireStampPalette(ed) {
   if (add && inp) add.addEventListener('click', () => { edAddStamp(ed, inp.value); inp.value = ''; });
 }
 
-// ===== BGM（トラック選択・試聴・追加・音量/フェード/ダッキング） =====
-let _bgmListCache = null, _bgmAudio = null;
-async function getBgmList() {
-  if (!_bgmListCache) _bgmListCache = await (await fetch('/api/bgm')).json();
-  return _bgmListCache;
-}
-function _bgmStopAudition(ed) {
-  if (_bgmAudio) { _bgmAudio.pause(); }
-  const prev = ed && ed.querySelector('.ed-bgm-prev'); if (prev) prev.textContent = '▶ 試聴';
-}
-async function edWireBgm(ed, cur) {
-  const sel = ed.querySelector('.ed-bgm-sel'); if (!sel) return;
-  const fill = list => {
-    const keep = sel.value;
-    sel.innerHTML = '<option value="">（BGMなし）</option>' + list.map(b =>
-      '<option value="' + esc(b.id) + '">' + (b.emoji ? b.emoji + ' ' : '') + esc(b.label) + '</option>').join('');
-    sel.value = keep;
-  };
-  try { fill(await getBgmList()); } catch (_) {}
-  if (cur && cur.id) {
-    sel.value = cur.id;
-    if (sel.value !== cur.id) sel.value = '';   // 曲ファイルが消えていた場合
-  }
-  const g = ed.querySelector('.ed-bgm-gain'), go = ed.querySelector('.ed-bgm-gain-o');
-  if (cur) {
-    if (g) g.value = Math.round((cur.gain != null ? +cur.gain : 0.25) * 100);
-    if (go && g) go.textContent = g.value;
-    const fi = ed.querySelector('.ed-bgm-fi'); if (fi && cur.fade_in != null) fi.value = cur.fade_in;
-    const fo = ed.querySelector('.ed-bgm-fo'); if (fo && cur.fade_out != null) fo.value = cur.fade_out;
-    const dk = ed.querySelector('.ed-bgm-duck'); if (dk) dk.checked = cur.duck !== false;
-  }
-  if (g) g.addEventListener('input', () => {
-    if (go) go.textContent = g.value;
-    if (_bgmAudio) _bgmAudio.volume = Math.min(1, (+g.value || 0) / 100);
-  });
-  const prev = ed.querySelector('.ed-bgm-prev');
-  if (prev) prev.addEventListener('click', async () => {
-    if (_bgmAudio && !_bgmAudio.paused) { _bgmStopAudition(ed); return; }
-    const id = sel.value; if (!id) return;
-    const meta = (await getBgmList()).find(x => x.id === id); if (!meta) return;
-    if (!_bgmAudio) _bgmAudio = new Audio();
-    _bgmAudio.src = meta.url; _bgmAudio.loop = true;
-    _bgmAudio.volume = Math.min(1, (+(g && g.value) || 25) / 100);
-    _bgmAudio.play().catch(() => {});
-    prev.textContent = '⏸ 停止';
-  });
-  sel.addEventListener('change', () => _bgmStopAudition(ed));
-  const add = ed.querySelector('.ed-bgm-add'), fiEl = ed.querySelector('.ed-bgm-file');
-  if (add && fiEl) {
-    add.addEventListener('click', () => fiEl.click());
-    fiEl.addEventListener('change', async () => {
-      const f = fiEl.files && fiEl.files[0]; fiEl.value = ''; if (!f) return;
-      const st = ed.querySelector('.ed-status');
-      try {
-        if (st) st.textContent = 'BGMを追加中...';
-        const fd = new FormData(); fd.append('file', f);
-        const r = await fetch('/api/bgm/upload', { method: 'POST', body: fd });
-        const d = await r.json();
-        if (!r.ok) throw new Error(d.detail || '追加に失敗しました');
-        _bgmListCache = d.bgm || [];
-        fill(_bgmListCache);
-        if (st) st.textContent = '✓ BGM「' + f.name + '」を追加しました';
-      } catch (e) { if (st) st.textContent = 'エラー: ' + e.message; }
-    });
-  }
-}
-
-function _applySfxList(ed, list) {
-  _sfxListCache = list;
-  ed._sfxById = Object.fromEntries(list.map(s => [s.id, s]));
-  edRenderSfxPalette(ed); edRenderSfxBlocks(ed);
-}
-async function edUploadSfx(ed, file) {
-  const st = ed.querySelector('.ed-status');
-  try {
-    if (st) st.textContent = '効果音を追加中...';
-    const fd = new FormData(); fd.append('file', file);
-    const r = await fetch('/api/sfx/upload', { method: 'POST', body: fd });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || '追加に失敗しました');
-    _applySfxList(ed, d.sfx || []);
-    if (st) st.textContent = '✓ 効果音「' + file.name + '」を追加しました';
-  } catch (e) { if (st) st.textContent = 'エラー: ' + e.message; }
-}
-async function edDeleteUserSfx(ed, id) {
-  const meta = (ed._sfxById || {})[id] || {};
-  if (!window.confirm('効果音「' + (meta.label || id) + '」をパソコンから削除しますか？')) return;
-  try {
-    const r = await fetch('/api/sfx/' + encodeURIComponent(id), { method: 'DELETE' });
-    const d = await r.json();
-    if (!r.ok) throw new Error(d.detail || '削除に失敗しました');
-    // タイムラインに置いた同idブロックも取り除く（音源が無くなるため）
-    if ((ed._sfx || []).some(b => b.id === id)) {
-      edPushUndo(ed);
-      ed._sfx = ed._sfx.filter(b => b.id !== id);
-      if (ed._selSfx && !(ed._sfx || []).some(b => b.uid === ed._selSfx)) ed._selSfx = null;
-      edRenderSelSfx(ed);
-    }
-    _applySfxList(ed, d.sfx || []);
-  } catch (e) { const st = ed.querySelector('.ed-status'); if (st) st.textContent = 'エラー: ' + e.message; }
-}
 function edRenderSfxBlocks(ed) {
   const lane = ed.querySelector('.ed-tl-sfx'); if (!lane) return;
   lane.querySelectorAll('.ed-block').forEach(n => n.remove());
@@ -2078,7 +1951,6 @@ function openDetailFromBtn(btn) {
 }
 function openDetail(job, cid, title) {
   const ed = document.getElementById('detailEditor');
-  _bgmStopAudition(ed);   // 前クリップのBGM試聴を止める
   // 動画要素を作り直し、前回のタイムライン用リスナー（timeupdate/play等）を破棄＝リーク防止
   const oldV = document.getElementById('detailVideo');
   const v = oldV.cloneNode(false);
@@ -2223,7 +2095,6 @@ async function loadEditor(ed) {
     ed._selTelop = -1; ed._selSfx = null;
     ed._undo = []; ed._redo = []; ed._undoTag = null;   // Undo履歴はクリップ読込ごとにリセット
     ed._selSet = null;
-    if (ed._magnet == null) ed._magnet = true;
     // 効果音レーン背景の音声波形（非同期・失敗しても編集には影響なし）
     ed._peaks = null;
     fetch('/api/clip/' + job + '/' + cid + '/waveform?n=' + Math.max(200, Math.min(4000, Math.round((+data.clip_duration || 60) * 8))))
@@ -2311,7 +2182,6 @@ async function loadEditor(ed) {
         '<div class="ed-tel-tools">' +
           '<button type="button" class="mini-btn ed-undo" onclick="edUndoBtn(this)" title="元に戻す (Ctrl+Z)" disabled>↶</button>' +
           '<button type="button" class="mini-btn ed-redo" onclick="edRedoBtn(this)" title="やり直す (Ctrl+Y)" disabled>↷</button>' +
-          '<button type="button" class="mini-btn ed-magnet on" onclick="edToggleMagnet(this)" title="磁石スナップ：ドラッグ時に他のブロック端・再生位置へ吸着">🧲</button>' +
           '<span class="ed-zoom-ctl" title="タイムライン拡大率（Ctrl+ホイールでも変更）">' +
             '<button type="button" class="mini-btn" onclick="edZoomBtn(this,-1)">−</button>' +
             '<span class="ed-zoom-o">' + Math.round(ED_PX / 80 * 100) + '%</span>' +
@@ -2325,22 +2195,6 @@ async function loadEditor(ed) {
       '</div>' +
       '<div class="ed-sfx-pal"></div>' +
       '<div class="ed-sfx-sug" hidden></div>' +
-      '<div class="ed-bgm">' +
-        '<div class="ed-bgm-row">' +
-          '<span class="ed-pal-lbl">🎵 BGM:</span>' +
-          '<select class="ed-bgm-sel"><option value="">（BGMなし）</option></select>' +
-          '<button type="button" class="mini-btn ed-bgm-prev">▶ 試聴</button>' +
-          '<button type="button" class="mini-btn ed-bgm-add" title="mp3/wav などを自分のBGMとして追加します">＋曲を追加</button>' +
-          '<input type="file" class="ed-bgm-file" hidden accept=".mp3,.wav,.m4a,.ogg,.aac,.flac,audio/*">' +
-        '</div>' +
-        '<div class="ed-bgm-opts">' +
-          '<label class="ed-bgm-gain-l">音量 <b class="ed-bgm-gain-o">25</b>%' +
-            '<input type="range" class="ed-bgm-gain" min="0" max="150" step="5" value="25"></label>' +
-          '<label>フェードイン <input type="number" class="ed-bgm-fi" min="0" max="5" step="0.5" value="1"> 秒</label>' +
-          '<label>フェードアウト <input type="number" class="ed-bgm-fo" min="0" max="5" step="0.5" value="1.5"> 秒</label>' +
-          '<label class="ed-flag" title="声が鳴っている間だけBGMを自動で小さくします（おすすめON）"><input type="checkbox" class="ed-bgm-duck" checked>声で自動下げ</label>' +
-        '</div>' +
-      '</div>' +
       '<div class="ed-stamp-pal"><span class="ed-pal-lbl">スタンプ（再生位置に2秒表示・プレビュー上をドラッグで移動）:</span>' +
         STAMP_EMOJIS.map(e => '<button type="button" class="stamp-chip" data-e="' + e + '">' + e + '</button>').join('') +
         '<input type="text" class="ed-stamp-custom" maxlength="8" placeholder="他の絵文字">' +
@@ -2391,9 +2245,7 @@ async function loadEditor(ed) {
     edWireZoom(ed);
     edSyncUndoBtns(ed);
     edDrawWave(ed);
-    edWireBgm(ed, data.bgm);   // BGM選択・試聴・追加（非同期でリスト充填）
     edWireStampPalette(ed);    // スタンプ絵文字パレット
-    const mg = ed.querySelector('.ed-magnet'); if (mg) mg.classList.toggle('on', ed._magnet !== false);
     // 字幕タイミング スライダー（per-clip・プレビュー即反映）
     (function () {
       const sr = ed.querySelector('.ed-suboff-range'), sv = ed.querySelector('.ed-suboff-val');
@@ -2902,16 +2754,6 @@ function _editorPayload(ed) {
   out.zooms = (ed._zooms || []).map(z => ({ start: +(+z.start).toFixed(2), end: +(+z.end).toFixed(2), scale: +z.scale }));   // 🔍ズーム区間
   out.stamps = (ed._stamps || []).map(s => ({ file: s.file, emoji: s.emoji, x: s.x, y: s.y, scale: s.scale,
     start: +(+s.start).toFixed(2), end: +(+s.end).toFixed(2) }));   // スタンプ
-  const bsel = ed.querySelector('.ed-bgm-sel');   // BGM（null=なし）
-  if (bsel) {
-    out.bgm = bsel.value ? {
-      id: bsel.value,
-      gain: (+((ed.querySelector('.ed-bgm-gain') || {}).value) || 0) / 100,
-      fade_in: +((ed.querySelector('.ed-bgm-fi') || {}).value) || 0,
-      fade_out: +((ed.querySelector('.ed-bgm-fo') || {}).value) || 0,
-      duck: !!(ed.querySelector('.ed-bgm-duck') || {}).checked,
-    } : null;
-  }
   return out;
 }
 async function saveClip(btn) {
