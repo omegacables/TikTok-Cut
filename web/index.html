@@ -290,7 +290,28 @@
             <option value="shake">シェイク（揺れ）</option>
             <option value="spin">スピン（1回転）</option>
             <option value="blurin">ブラー（ぼけ→鮮明）</option>
+            <option value="stagger">1文字ずつポップ</option>
+            <option value="typewriter">タイプライター</option>
           </select>
+        </div>
+        <div class="field small">
+          <label for="exitSelect">退場アニメ <span class="opt">（消えるときの動き）</span></label>
+          <select id="exitSelect">
+            <option value="none" selected>なし</option>
+            <option value="fade">フェードアウト</option>
+            <option value="shrink">縮んで消える</option>
+            <option value="blurout">ぼけて消える</option>
+            <option value="flip">めくれて消える</option>
+          </select>
+        </div>
+        <div class="field small">
+          <label>単語カラオケ <span class="opt">（しゃべった所まで色が変わる）</span></label>
+          <div style="display:flex;flex-direction:column;gap:8px;">
+            <label class="switch" style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;font-size:.85rem;">
+              <input type="checkbox" id="karaOn" style="width:18px;height:18px;accent-color:var(--accent);">
+              <span style="color:var(--muted);">🎤 カラオケ字幕にする（色は「強調の色」）</span>
+            </label>
+          </div>
         </div>
         <div class="field small">
           <label>反応テロップ <span class="opt">（AIが字幕内容から自動付与）</span></label>
@@ -311,6 +332,10 @@
         </div>
       </div>
       <div class="style-section">
+        <div class="field">
+          <label>見た目テンプレ <span class="opt">（ワンタップでフォント・色・アニメをまとめて設定。あとから個別に調整できます）</span></label>
+          <div id="tplRow" class="tpl-row"></div>
+        </div>
         <div class="field">
           <label for="fontSelect">字幕フォント</label>
           <select id="fontSelect"></select>

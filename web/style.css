@@ -758,3 +758,94 @@ html { font-size: 108%; }
   background: var(--surface-2); border: 1px solid var(--accent-2);
   color: var(--accent-2); font-weight: 700; }
 .detail-dl:hover { background: rgba(37,244,238,.12); }
+
+/* ===== v0.8.0 エディタUX（Undo/ズーム/波形/磁石/複数選択） ===== */
+.ed-tl-wave { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 0; }
+.ed-block.msel { outline: 2px dashed #ffd54a; outline-offset: 1px; }
+.ed-magnet { opacity: .45; }
+.ed-magnet.on { opacity: 1; border-color: var(--accent-2); color: var(--accent-2); }
+.ed-undo:disabled, .ed-redo:disabled { opacity: .35; cursor: default; }
+.ed-zoom-ctl { display: inline-flex; align-items: center; gap: 4px; }
+.ed-zoom-ctl .ed-zoom-o { font-size: .72rem; color: var(--muted); min-width: 38px; text-align: center; }
+.ed-tl-hint { margin: 4px 0 0; font-size: .7rem; color: var(--muted); }
+#tab-detail .ed-tl-hint { font-size: .8rem; }
+
+/* ===== v0.8.0 アニメ/エフェクト拡充 ===== */
+/* 1文字ずつ入場・カラオケのプレビュー（焼き込みの近似） */
+.pv-ch { display: inline-block; }
+@keyframes pvChPop { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
+@keyframes pvChShow { from { opacity: 0; } to { opacity: 1; } }
+@keyframes pvChKara { to { color: var(--pv-kara, #FFE600); } }
+/* ネオン: 発光ピンクの縁 */
+.pv-eff-neon { text-shadow: 0 0 5px #ee3bff, 0 0 12px #ee3bff, 0 0 22px rgba(238,59,255,.7) !important; }
+/* 虹色: 色相を回す */
+@keyframes pvRainbow { 0% { color: #ff3b3b; } 17% { color: #ff9900; } 33% { color: #ffee00; }
+  50% { color: #2ee66b; } 67% { color: #25f4ee; } 83% { color: #4066ff; } 100% { color: #cc39ff; } }
+.pv-eff-rainbow { animation: pvRainbow 3s linear infinite !important; }
+/* 金文字 */
+.pv-eff-gold { color: #FFC31C !important; -webkit-text-stroke-color: #8F5C0E !important;
+  text-shadow: 0 1px 2px rgba(90,60,0,.6), 0 0 10px rgba(255,195,28,.45) !important; }
+/* ジッター: 常時微振動（rotate独立プロパティ＝translateと干渉しない） */
+@keyframes pvJitter { 0% { rotate: 1.2deg; } 25% { rotate: -1.1deg; } 50% { rotate: 0.9deg; }
+  75% { rotate: -1.2deg; } 100% { rotate: 1.2deg; } }
+.pv-eff-jitter { animation: pvJitter .45s steps(4) infinite; }
+/* 詳細編集: カラオケトグル */
+.ed-kara-item { display: flex; align-items: center; gap: 8px; }
+.ed-kara-item input { width: 18px; height: 18px; accent-color: var(--accent-2); }
+
+/* ===== v0.8.0 見た目テンプレチップ ===== */
+.tpl-row { display: flex; flex-wrap: wrap; gap: 8px; }
+.tpl-chip { padding: 9px 14px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 10px; font-size: .95rem; cursor: pointer; transition: border-color .15s, transform .1s; }
+.tpl-chip:hover { border-color: var(--accent-2); transform: translateY(-1px); }
+.tpl-chip.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+
+/* ===== v0.8.0 効果音パレット（カテゴリ・追加・削除） ===== */
+.ed-pal-cat { flex-basis: 100%; font-size: .68rem; color: var(--accent-2); margin-top: 4px; }
+#tab-detail .ed-pal-cat { font-size: .78rem; }
+.sfx-udel { margin-left: 6px; color: var(--muted); font-weight: 700; }
+.sfx-udel:hover { color: var(--accent); }
+.ed-sfx-add { border-style: dashed; }
+
+/* ===== v0.8.0 BGM ===== */
+.ed-bgm { margin: 8px 0; padding: 8px 10px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; }
+.ed-bgm-row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ed-bgm-sel { flex: 1; min-width: 160px; }
+.ed-bgm-opts { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 6px; }
+.ed-bgm-opts label { display: inline-flex; align-items: center; gap: 5px; font-size: .72rem; color: var(--muted); }
+#tab-detail .ed-bgm-opts label { font-size: .82rem; }
+.ed-bgm-gain-l { flex: 1; min-width: 160px; }
+.ed-bgm-gain-l input[type=range] { flex: 1; }
+.ed-bgm-fi, .ed-bgm-fo { width: 58px; }
+
+/* ===== v0.8.0 AI効果音サジェスト ===== */
+.ed-sfx-sug { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0;
+  padding: 8px 10px; background: rgba(37,244,238,.06); border: 1px dashed var(--accent-2); border-radius: 8px; }
+.sug-chip.used { opacity: .4; }
+
+/* ===== v0.8.0 ズーム区間（パンチイン） ===== */
+.ed-zoomz { position: absolute; left: 46px; right: 0; background: rgba(255,213,74,.14);
+  border: 1px dashed #ffd54a; border-left: 3px solid #ffd54a; box-sizing: border-box; z-index: 4;
+  display: flex; align-items: center; justify-content: center; gap: 6px; touch-action: none; cursor: grab; }
+.ed-zoomz:active { cursor: grabbing; }
+.ed-zoom-scale { background: rgba(0,0,0,.45); border: 1px solid #ffd54a; color: #ffd54a;
+  border-radius: 6px; font-size: .7rem; padding: 1px 7px; cursor: pointer; }
+.ed-zoom-del { position: absolute; top: 2px; right: 4px; background: none; border: none;
+  color: #ffd54a; font-size: .8rem; cursor: pointer; }
+.ed-zoomz .ed-cut-grip { position: absolute; left: 0; right: 0; height: 7px; cursor: ns-resize; }
+.ed-zoomz .ed-zoom-top { top: 0; } .ed-zoomz .ed-zoom-bot { bottom: 0; }
+#tab-detail .ed-zoom-scale { font-size: .8rem; }
+
+/* ===== v0.8.0 スタンプ ===== */
+.ed-stamp-pal { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 6px 0; }
+.stamp-chip { font-size: 1.25rem; padding: 4px 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.stamp-chip:hover { border-color: var(--accent-2); }
+.ed-stamp-custom { width: 96px; padding: 6px 8px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 8px; color: var(--text); font-size: .95rem; }
+.ed-stamp-chip { position: absolute; transform: translate(-50%, -50%); cursor: grab;
+  touch-action: none; user-select: none; z-index: 20; }
+.ed-stamp-chip:active { cursor: grabbing; }
+.ed-stamp-chip.sel { outline: 2px dashed var(--accent-2); outline-offset: 2px; }
+.ed-sel-stamp .ed-st-sc-l { flex: 1; min-width: 150px; }
+.ed-sel-stamp .ed-st-sc-l input[type=range] { flex: 1; }

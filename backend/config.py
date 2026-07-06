@@ -99,24 +99,149 @@ def _sfx_dir() -> Path:
 # 同梱効果音（mp3）の置き場。タイムラインエディタで配置し render で amix する。
 SFX_DIR = _sfx_dir()
 
-# 選択可能な効果音。file は SFX_DIR 内の実体（ASCII名・ffmpeg/URL安全）。dur は秒。
+# 選択可能な効果音。file は SFX_DIR 内の実体（ASCII名・ffmpeg/URL安全）。dur は秒。cat=パレットの分類。
 SFX = [
-    {"id": "chime",    "label": "チーン（正解・締め）",   "file": "chime.mp3",    "dur": 3.53, "emoji": "🔔"},
-    {"id": "pop",      "label": "ニュッ（登場）",         "file": "pop.mp3",      "dur": 0.29, "emoji": "✨"},
-    {"id": "tsukkomi", "label": "ビシッ（ツッコミ）",     "file": "tsukkomi.mp3", "dur": 0.41, "emoji": "👊"},
-    {"id": "bonk",     "label": "ポカン（げんこつ）",     "file": "bonk.mp3",      "dur": 0.30, "emoji": "💥"},
-    {"id": "silly",    "label": "間抜け（ズコー）",       "file": "silly.mp3",    "dur": 1.24, "emoji": "😅"},
+    {"id": "chime",    "label": "チーン（正解・締め）",   "file": "chime.mp3",    "dur": 3.53, "emoji": "🔔", "cat": "comedy"},
+    {"id": "pop",      "label": "ニュッ（登場）",         "file": "pop.mp3",      "dur": 0.29, "emoji": "✨", "cat": "comedy"},
+    {"id": "tsukkomi", "label": "ビシッ（ツッコミ）",     "file": "tsukkomi.mp3", "dur": 0.41, "emoji": "👊", "cat": "comedy"},
+    {"id": "bonk",     "label": "ポカン（げんこつ）",     "file": "bonk.mp3",      "dur": 0.30, "emoji": "💥", "cat": "comedy"},
+    {"id": "silly",    "label": "間抜け（ズコー）",       "file": "silly.mp3",    "dur": 1.24, "emoji": "😅", "cat": "comedy"},
+    {"id": "don",      "label": "ドン！（強調）",         "file": "don.mp3",      "dur": 0.60, "emoji": "🥁", "cat": "impact"},
+    {"id": "dodon",    "label": "ドドン（太鼓2連）",      "file": "dodon.mp3",    "dur": 0.95, "emoji": "🪘", "cat": "impact"},
+    {"id": "shakin",   "label": "シャキーン（キメ）",     "file": "shakin.mp3",   "dur": 0.80, "emoji": "⚔️", "cat": "impact"},
+    {"id": "jajan",    "label": "ジャジャーン（発表）",   "file": "jajan.mp3",    "dur": 1.30, "emoji": "🎺", "cat": "impact"},
+    {"id": "pi",       "label": "ピッ（決定・切替）",     "file": "pi.mp3",       "dur": 0.12, "emoji": "🔘", "cat": "system"},
+    {"id": "bubu",     "label": "ブブー（不正解）",       "file": "bubu.mp3",     "dur": 0.56, "emoji": "❌", "cat": "system"},
+    {"id": "hyu",      "label": "ヒュッ（スイープ）",     "file": "hyu.mp3",      "dur": 0.45, "emoji": "💨", "cat": "system"},
+    {"id": "kirarin",  "label": "キラリン（ひらめき）",   "file": "kirarin.mp3",  "dur": 0.80, "emoji": "💡", "cat": "system"},
 ]
 _SFX_BY_ID = {s["id"]: s for s in SFX}
+
+# ユーザー追加の効果音置き場（出力フォルダ内＝手動でファイルを置いても認識される）
+USER_SFX_DIR = OUTPUT_ROOT / "効果音（追加）"
+_USER_SFX_EXTS = {".mp3", ".wav", ".m4a", ".ogg", ".aac", ".flac"}
+_user_sfx: dict[str, dict] = {}   # id -> {label,file(絶対パス),dur,emoji,mtime}
+
+
+def _probe_duration(path: Path) -> float:
+    """ffmpeg -i の stderr から Duration を読む（ffprobe 非依存）。失敗時 0。"""
+    import re as _re
+    import subprocess as _sp
+    try:
+        proc = _sp.run([FFMPEG, "-hide_banner", "-i", str(path)],
+                       stdout=_sp.PIPE, stderr=_sp.PIPE, text=True, errors="replace", timeout=15)
+        m = _re.search(r"Duration:\s*(\d+):(\d+):(\d+)\.(\d+)", proc.stderr or "")
+        if m:
+            h, mnt, s, cs = (int(x) for x in m.groups())
+            return h * 3600 + mnt * 60 + s + cs / 100.0
+    except Exception:  # noqa: BLE001
+        pass
+    return 0.0
+
+
+def user_sfx_scan() -> list[dict]:
+    """USER_SFX_DIR を走査してユーザー効果音一覧を返す（実装は _scan_user_audio 共通）。"""
+    return _scan_user_audio(USER_SFX_DIR, _user_sfx, "🎵")
+
+
+def all_sfx() -> list[dict]:
+    """同梱＋ユーザー効果音の一覧（API 用）。"""
+    return list(SFX) + user_sfx_scan()
 
 
 def sfx_path(sfx_id: str) -> Path | None:
     """効果音 id → 実体パス。未知 id は None。"""
-    s = _SFX_BY_ID.get(str(sfx_id))
-    if not s:
-        return None
-    p = SFX_DIR / s["file"]
-    return p if p.exists() else None
+    sid = str(sfx_id)
+    s = _SFX_BY_ID.get(sid)
+    if s:
+        p = SFX_DIR / s["file"]
+        return p if p.exists() else None
+    if sid.startswith("u_"):
+        u = _user_sfx.get(sid)
+        if not u:
+            user_sfx_scan()   # 未知のユーザーidは再走査（再起動後など）
+            u = _user_sfx.get(sid)
+        if u:
+            p = Path(u["file"])
+            return p if p.exists() else None
+    return None
+
+
+# ===== BGM（同梱ループ＋ユーザー曲。保存時に声を邪魔しない音量で合成） =====
+def _bgm_dir() -> Path:
+    bd = _bundle_dir()
+    if bd:
+        cand = bd / "assets" / "bgm"
+        if cand.exists():
+            return cand
+    return PROJECT_DIR / "assets" / "bgm"
+
+
+BGM_DIR = _bgm_dir()
+BGM = [
+    {"id": "pad_warm",      "label": "あたたかパッド（しっとり）", "file": "pad_warm.mp3",      "dur": 32.0, "emoji": "🎹"},
+    {"id": "ambient_float", "label": "浮遊アンビエント（静か）",   "file": "ambient_float.mp3", "dur": 32.0, "emoji": "🌫️"},
+    {"id": "arp_8bit",      "label": "8bitアルペジオ（ゲーム）",   "file": "arp_8bit.mp3",      "dur": 32.0, "emoji": "🕹️"},
+]
+_BGM_BY_ID = {b["id"]: b for b in BGM}
+USER_BGM_DIR = OUTPUT_ROOT / "BGM（追加）"
+_user_bgm: dict[str, dict] = {}
+
+
+def _scan_user_audio(dir_path: Path, cache: dict[str, dict], emoji: str) -> list[dict]:
+    """ユーザー音声フォルダの走査（効果音/BGM共通）。新規/更新ぶんだけ長さを probe。"""
+    try:
+        dir_path.mkdir(parents=True, exist_ok=True)
+        files = sorted(dir_path.iterdir())
+    except OSError:
+        return []
+    seen: set[str] = set()
+    out: list[dict] = []
+    for p in files:
+        if not p.is_file() or p.suffix.lower() not in _USER_SFX_EXTS:
+            continue
+        sid = "u_" + "".join(c if (c.isalnum() or c in "-_") else "_" for c in p.stem)[:48]
+        base, n = sid, 2
+        while sid in seen:
+            sid = f"{base}{n}"
+            n += 1
+        seen.add(sid)
+        try:
+            mtime = p.stat().st_mtime
+        except OSError:
+            continue
+        cached = cache.get(sid)
+        if not cached or cached.get("mtime") != mtime or cached.get("file") != str(p):
+            cached = {"id": sid, "label": p.stem, "file": str(p),
+                      "dur": round(_probe_duration(p), 2), "emoji": emoji, "cat": "user",
+                      "mtime": mtime}
+            cache[sid] = cached
+        out.append({k: v for k, v in cached.items() if k != "mtime"})
+    for sid in list(cache):
+        if sid not in seen:
+            cache.pop(sid, None)
+    return out
+
+
+def all_bgm() -> list[dict]:
+    return list(BGM) + _scan_user_audio(USER_BGM_DIR, _user_bgm, "🎵")
+
+
+def bgm_path(bgm_id: str) -> Path | None:
+    bid = str(bgm_id)
+    b = _BGM_BY_ID.get(bid)
+    if b:
+        p = BGM_DIR / b["file"]
+        return p if p.exists() else None
+    if bid.startswith("u_"):
+        u = _user_bgm.get(bid)
+        if not u:
+            _scan_user_audio(USER_BGM_DIR, _user_bgm, "🎵")
+            u = _user_bgm.get(bid)
+        if u:
+            p = Path(u["file"])
+            return p if p.exists() else None
+    return None
 
 # 選択可能フォント。family は ASS の Fontname と一致させる（fonttools で実名を確認済み）。
 # bundled=True は assets/fonts に同梱、False は Windows 標準フォント。

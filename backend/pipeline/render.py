@@ -425,6 +425,33 @@ def _intro_video_filter(intro: str, fps: float, dur: float = 0.5) -> str:
     return ""
 
 
+def _zoom_video_filter(zooms, fps: float) -> str:
+    """区間パンチイン（🔍ズーム）。指定区間だけ映像を拡大（0.25秒でなめらかに寄って戻る）。
+
+    リフレーム後・字幕焼き込み前に入れる＝字幕は拡大されず読みやすいまま。
+    """
+    zones = []
+    for z in zooms or []:
+        try:
+            a = max(0.0, float(z.get("start", 0)))
+            b = float(z.get("end", 0))
+            s = max(1.02, min(1.6, float(z.get("scale", 1.2))))
+        except (TypeError, ValueError, AttributeError):
+            continue
+        if b > a + 0.1:
+            zones.append((a, b, s))
+    if not zones:
+        return ""
+    r = 0.25   # 寄り/戻りのランプ秒
+    terms = []
+    for a, b, s in zones:
+        t = f"on/{fps:.3f}"
+        terms.append(f"({s - 1.0:.3f}*min(max(({t}-{a:.3f})/{r},0),1)*min(max(({b:.3f}-{t})/{r},0),1))")
+    zexpr = "min(1+" + "+".join(terms) + ",1.8)"
+    return (f"zoompan=z='{zexpr}':x='iw/2-(iw/zoom/2)':y='ih/2-(ih/zoom/2)':"
+            f"d=1:s={OUTPUT_W}x{OUTPUT_H}:fps={fps:.3f}")
+
+
 def _audio_intro_filter(intro: str, dur: float = 0.4) -> str:
     """冒頭トランジションに合わせた音声フェードイン。"""
     intro = (intro or "none").lower()
@@ -445,6 +472,7 @@ def render_clip(
     intro: str | None = None,
     letterbox_color: str = "black",
     logo: dict | None = None,
+    zooms: list | None = None,
     fonts_dir: str | Path | None = FONTS_DIR,
     ffmpeg: str = FFMPEG,
     force_cpu: bool = False,
@@ -471,9 +499,12 @@ def render_clip(
             fonts_local = _stage_fonts(work, fonts_dir, out_path.stem)
             ass_opt = _fontsdir_opt(ass_name, fonts_local)
 
-            # リフレーム → 字幕焼き込み → 冒頭トランジション（映像） → ロゴ（最前面）の順。
-            vf_parts = [_reframe_filter(mode, letterbox_color), f"ass={ass_opt}"]
-            intro_v = _intro_video_filter(intro, probe_fps(input_video)) if intro else ""
+            # リフレーム → 区間ズーム → 字幕焼き込み → 冒頭トランジション（映像） → ロゴ（最前面）の順。
+            _fps = probe_fps(input_video)
+            zoom_v = _zoom_video_filter(zooms, _fps)
+            vf_parts = [_reframe_filter(mode, letterbox_color)] \
+                + ([zoom_v] if zoom_v else []) + [f"ass={ass_opt}"]
+            intro_v = _intro_video_filter(intro, _fps) if intro else ""
             if intro_v:
                 vf_parts.append(intro_v)
             vf_chain = ",".join(vf_parts)
@@ -564,6 +595,7 @@ def render_clip_segments(
     intro: str | None = None,
     letterbox_color: str = "black",
     logo: dict | None = None,
+    zooms: list | None = None,
     fonts_dir: str | Path | None = FONTS_DIR,
     ffmpeg: str = FFMPEG,
     force_cpu: bool = False,
@@ -622,7 +654,10 @@ def render_clip_segments(
             (work / ass_name).write_text(ass_content, encoding="utf-8")
             fonts_local = _stage_fonts(work, fonts_dir, out_path.stem)
             ass_opt = _fontsdir_opt(ass_name, fonts_local)
-            vchain = f"[cv]{_reframe_filter(mode, letterbox_color)},ass={ass_opt}" + (f",{intro_v}" if intro_v else "") + vlast
+            zoom_v = _zoom_video_filter(zooms, probe_fps(input_video))
+            vchain = (f"[cv]{_reframe_filter(mode, letterbox_color)}"
+                      + (f",{zoom_v}" if zoom_v else "")
+                      + f",ass={ass_opt}" + (f",{intro_v}" if intro_v else "") + vlast)
             if has_audio:
                 achain = (f"[ca]{intro_a}[aout]" if intro_a else None)
                 amap = "[aout]" if achain else "[ca]"
@@ -758,6 +793,70 @@ def overlay_logo(
         ]
 
     _run_with_nvenc_fallback(build, cwd=video_path.parent, ffmpeg=ffmpeg)
+    replace_retry(tmp, video_path)
+    return video_path
+
+
+def apply_stamps(
+    video_path: str | Path,
+    stamps: list[dict],
+    assets_dir: str | Path,
+    *,
+    ffmpeg: str = FFMPEG,
+) -> Path:
+    """生成済みクリップに絵文字/画像スタンプを時間区間つきで重ねる（2パス・ロゴと同方式）。
+
+    stamps: [{file(assets_dir相対のPNG), x, y(0-1 中心), scale(横幅比), start, end, rot(度・任意)}]
+    """
+    video_path = Path(video_path).resolve()
+    assets_dir = Path(assets_dir)
+    valid: list[tuple[Path, dict]] = []
+    for s in stamps or []:
+        try:
+            p = (assets_dir / str(s.get("file", ""))).resolve()
+            # ジョブフォルダ外への参照（パストラバーサル）は拒否
+            if not str(p).startswith(str(assets_dir.resolve())):
+                continue
+            if p.exists() and float(s.get("end", 0)) > float(s.get("start", 0)):
+                valid.append((p, s))
+        except (TypeError, ValueError, OSError):
+            continue
+    if not valid:
+        return video_path
+    tmp = video_path.with_name(video_path.stem + "__st.mp4")
+    inputs: list[str] = ["-i", str(video_path)]
+    chains: list[str] = []
+    last = "[0:v]"
+    for idx, (p, s) in enumerate(valid, start=1):
+        inputs += ["-i", str(p)]
+        w = max(40, int(OUTPUT_W * max(0.05, min(0.9, float(s.get("scale", 0.25))))))
+        pre = f"[{idx}:v]scale={w}:-1"
+        rot = float(s.get("rot", 0) or 0)
+        if abs(rot) > 0.5:   # 回転（透過を維持）
+            pre += f",rotate={rot * 3.14159 / 180:.4f}:c=none:ow=rotw({rot * 3.14159 / 180:.4f}):oh=roth({rot * 3.14159 / 180:.4f})"
+        chains.append(pre + f"[st{idx}]")
+        x = max(0.0, min(1.0, float(s.get("x", 0.5))))
+        y = max(0.0, min(1.0, float(s.get("y", 0.35))))
+        a, b = float(s.get("start", 0)), float(s.get("end", 0))
+        out = f"[ov{idx}]" if idx < len(valid) else "[vout]"
+        chains.append(f"{last}[st{idx}]overlay=x='{OUTPUT_W}*{x:.4f}-w/2':y='{OUTPUT_H}*{y:.4f}-h/2'"
+                      f":enable='between(t,{a:.2f},{b:.2f})'{out}")
+        last = f"[ov{idx}]"
+    fc = ";".join(chains)
+
+    def build(use_nvenc: bool) -> list[str]:
+        return [
+            ffmpeg, "-y", *inputs,
+            "-filter_complex", fc,
+            "-map", "[vout]", "-map", "0:a?",
+            *_video_codec_args(use_nvenc=use_nvenc, ffmpeg=ffmpeg),
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            tmp.name,
+        ]
+
+    _run_with_nvenc_fallback(build, cwd=video_path.parent, ffmpeg=ffmpeg,
+                             label=f"apply_stamps {video_path.name}")
     replace_retry(tmp, video_path)
     return video_path
 

@@ -389,6 +389,61 @@ def retitle(clip_text: str, instruction: str, *, meta_title: str | None = None) 
         return None
 
 
+def suggest_sfx(telops: list[dict], sfx_catalog: list[dict], clip_duration: float) -> list[dict]:
+    """テロップ内容から効果音の配置候補を提案する（編集UIの「AI提案」）。失敗時 []。
+
+    返り値: [{"at": 秒, "id": 効果音id, "reason": 短い理由}] （最大4件・時刻順）
+    """
+    if SETTINGS.effective_provider() == "heuristic":
+        return []
+    lines = [f"{float(tp.get('start', 0)):.1f}s: {str(tp.get('text', ''))}"
+             for tp in telops if str(tp.get("text", "")).strip()]
+    if not lines:
+        return []
+    valid_ids = {str(s.get("id", "")) for s in sfx_catalog}
+    catalog = "\n".join(f"- {s['id']}: {s.get('label', s['id'])}" for s in sfx_catalog)
+    prompt = f"""次は TikTok 縦型切り抜きクリップの字幕（開始秒: テキスト）です。
+内容が最も引き立つ場所に効果音を最大4つ提案してください。
+
+ルール:
+- 入れすぎない（本当に効果的な場所だけ。0〜4個）
+- ツッコミ・オチ・決め台詞・登場・驚きの「瞬間」に合わせる
+- at は該当する発話の開始秒に合わせる（0〜{clip_duration:.1f}の範囲）
+- id は次の一覧から選ぶ
+
+使える効果音:
+{catalog}
+
+出力は次の JSON のみ:
+{{"sfx": [{{"at": 1.2, "id": "tsukkomi", "reason": "ツッコミの瞬間"}}]}}
+
+--- 字幕 ---
+{chr(10).join(lines)[:1500]}
+"""
+    try:
+        raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", provider.generate_json(prompt).strip(),
+                     flags=re.IGNORECASE | re.MULTILINE).strip()
+        data = json.loads(raw)
+        items = data.get("sfx") if isinstance(data, dict) else None
+        out: list[dict] = []
+        for it in (items or [])[:4]:
+            if not isinstance(it, dict):
+                continue
+            sid = str(it.get("id", ""))
+            if sid not in valid_ids:
+                continue
+            try:
+                at = max(0.0, min(float(clip_duration or 0) or 9e9, float(it.get("at", 0))))
+            except (TypeError, ValueError):
+                continue
+            out.append({"at": round(at, 2), "id": sid, "reason": str(it.get("reason", ""))[:60]})
+        out.sort(key=lambda x: x["at"])
+        return out
+    except Exception as e:  # noqa: BLE001
+        print(f"[highlight] suggest_sfx スキップ ({type(e).__name__}: {e})", flush=True)
+        return []
+
+
 def select_highlights(
     t: Transcript,
     clip_count: int | None = None,

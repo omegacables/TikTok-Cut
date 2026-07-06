@@ -120,7 +120,112 @@ _EFFECT_TAGS = {
     "sparkle": r"{\be1}",          # 文字は軽くにじませ、★粒子は _sparkle_events で重ねる
     "horror": (r"{\1c&H2424E0&\3c&H101058&\blur1.2"
                r"\frz-1.5\t(0,130,\frz1.5)\t(130,260,\frz-1.2)\t(260,400,\frz0.8)\t(400,560,\frz0)}"),
+    # ネオン: 発光ピンクの太縁＋にじみ（文字色は維持）
+    "neon": r"{\bord6\blur5\3c&HD43BFF&}",
+    # 金文字: ゴールド本体＋焦げ茶縁＋軽い艶
+    "gold": r"{\1c&H1CC3FF&\3c&H0E5C8F&\bord4\blur0.8}",
 }
+
+# 虹色: \1c を \t で順に回す（7色×450ms×2周 ≒ 6.3秒。それ以上の長尺は最後の色で静止）
+_RAINBOW_COLS = ["&H0000FF&", "&H0099FF&", "&H00FFFF&", "&H00FF00&", "&HFFFF00&", "&HFF6640&", "&HFF00CC&"]
+
+
+def _rainbow_tags() -> str:
+    step = 450
+    parts = []
+    for loop in range(2):
+        for i, c in enumerate(_RAINBOW_COLS):
+            t0 = (loop * len(_RAINBOW_COLS) + i) * step
+            parts.append(rf"\t({t0},{t0 + step},\1c{c})")
+    return "{" + "".join(parts) + "}"
+
+
+def _jitter_tags() -> str:
+    """常時微振動（回転ジッター・8秒ぶん生成＝実用上の常時）。"""
+    parts = []
+    t = 0
+    import itertools
+    angles = itertools.cycle([1.2, -1.1, 0.9, -1.2, 1.0, -0.8])
+    while t < 8000:
+        a = next(angles)
+        parts.append(rf"\t({t},{t + 110},\frz{a:g})")
+        t += 110
+    parts.append(rf"\t({t},{t + 110},\frz0)")
+    return "{" + "".join(parts) + "}"
+
+
+def _exit_group(exit_animation: str | None, dur_ms: int) -> str:
+    """退場アニメの override（{}込み）。テロップ表示時間の末尾に \\t を仕込む。"""
+    a = (exit_animation or "").lower()
+    if not a or a == "none" or dur_ms < 500:   # 短すぎる表示は退場を付けない（入場と衝突）
+        return ""
+    d = int(dur_ms)
+    t0 = max(int(d * 0.55), d - 260)
+    if a == "fade":
+        return rf"{{\t({t0},{d},\alpha&HFF&)}}"
+    if a == "shrink":
+        return rf"{{\t({t0},{d},\fscx30\fscy30\alpha&HE0&)}}"
+    if a == "blurout":
+        return rf"{{\t({t0},{d},\blur14\alpha&HB0&)}}"
+    if a == "flip":
+        return rf"{{\t({t0},{d},\fry90\alpha&HA0&)}}"
+    return ""
+
+
+# 1文字ずつの時差入場（stagger=ポップ/typewriter=打鍵）。行折返しを保ったままインラインタグで実現。
+_CHAR_ANIMS = ("stagger", "typewriter")
+
+
+def _char_anim_text(lines: list[str], kind: str, dur_ms: int) -> str:
+    chars: list[str] = []
+    for li, ln in enumerate(lines):
+        if li:
+            chars.append("\\N")
+        chars.extend(_escape(ln))
+    n = max(1, sum(1 for c in chars if c != "\\N"))
+    # 入場全体は最大600ms・表示時間の半分まで（短いテロップで出終わらないのを防ぐ）
+    total = min(600, int(dur_ms * 0.5))
+    delay = max(18, min(60, total // n))
+    out: list[str] = []
+    k = 0
+    for c in chars:
+        if c == "\\N":
+            out.append(c)
+            continue
+        off = k * delay
+        if kind == "typewriter":
+            out.append(rf"{{\alpha&HFF&\t({off},{off + 10},\alpha&H00&)}}{c}")
+        else:   # stagger: 1文字ずつポップ
+            out.append(rf"{{\alpha&HFF&\fscx40\fscy40\t({off},{off + 150},\alpha&H00&\fscx100\fscy100)}}{c}")
+        k += 1
+    return "".join(out)
+
+
+def _karaoke_text(lines: list[str], dur_sec: float) -> str:
+    """単語カラオケ（文字比例タイミング）。\\k で「しゃべった所まで」色が変わる。
+
+    テロップは無音・文末で分割済み＝内部の発話はほぼ連続なので、文字数比例で十分同期する。
+    手編集されたテキストでも壊れない（実文字列だけから生成）。
+    """
+    chars: list[str] = []
+    for li, ln in enumerate(lines):
+        if li:
+            chars.append("\\N")
+        chars.extend(_escape(ln))
+    n = max(1, sum(1 for c in chars if c != "\\N"))
+    total_cs = max(10, int(dur_sec * 100 * 0.92))   # 少し早めに読み切る（語尾の余韻）
+    base = total_cs // n
+    rem = total_cs - base * n
+    out: list[str] = []
+    k = 0
+    for c in chars:
+        if c == "\\N":
+            out.append(c)
+            continue
+        cs = base + (1 if k < rem else 0)
+        out.append(rf"{{\k{max(1, cs)}}}{c}")
+        k += 1
+    return "".join(out)
 
 # ★粒子（キラキラ）の配置（画面上部にばら撒く・0-1 正規化）と簡易スター形状
 _SPARKLE_PTS = [(0.16, 0.13), (0.84, 0.15), (0.30, 0.085), (0.70, 0.10),
@@ -141,7 +246,12 @@ def _anim_group(animation: str | None, kind: str, animate: bool) -> str:
 
 def _effect_group(effect: str | None) -> str:
     """文字に付与する装飾 override（{}込み）。"""
-    return _EFFECT_TAGS.get((effect or "none").lower(), "")
+    e = (effect or "none").lower()
+    if e == "rainbow":
+        return _rainbow_tags()
+    if e == "jitter":
+        return _jitter_tags()
+    return _EFFECT_TAGS.get(e, "")
 
 
 def _glow_group(color_hex: str, font_size: int) -> str:
@@ -674,13 +784,15 @@ def build_ass(
     title_style: TitleStyle | None = None,
     font: str | None = None,
     subtitle_color: str | None = None,
-    highlight_color: str | None = None,   # 互換（旧カラオケ・未使用）
+    highlight_color: str | None = None,   # カラオケの発話済み色（karaoke=True 時に使用）
     emphasis_color: str | None = None,    # 強調テロップ(中央大)の色
     outline_color: str | None = None,
     title_color: str | None = None,
     title_outline_color: str | None = None,
     animate: bool = False,
     animation: str | None = None,
+    exit_animation: str | None = None,   # 退場アニメ（none/fade/shrink/blurout/flip）
+    karaoke: bool = False,               # 単語カラオケ（しゃべった所まで highlight_color に変わる）
     effect: str | None = None,
     caption_size: float | None = None,
     caption_width: float | None = None,   # 字幕の折返し幅（0.35〜0.95・既定 _WIDTH_RATIO）
@@ -784,6 +896,10 @@ def build_ass(
         # Comment: コメント読み上げ＝白ボックス(BorderStyle=3)＋濃い太字。Outline=余白。
         f"Style: Comment,{font_cap},{cap_size},"
         f"&H00202020,&H00202020,&H00FFFFFF,&H30000000,-1,0,0,0,100,100,0,0,3,16,4,4,0,0,0,1",
+        # Karaoke: 単語カラオケ。\k で Secondary(未発話=字幕色)→Primary(発話済=強調色)に変わる。
+        f"Style: Karaoke,{font_cap},{cap_size},"
+        f"{_ass_color(highlight_color or '#FFE600')},{_ass_color(sub_c)},{cap_outline_col},{sh_col},-1,0,0,0,"
+        f"100,100,0,0,{cap_border},{cap_pad},{cap_shad:g},2,{margin_l},{margin_r},{caption_mv},1",
         # Avatar: コメントの青丸＋人型シルエット（描画用・縁/影なし・左上アンカー）
         "Style: Avatar,Arial,20,&H00FFFFFF,&H00FFFFFF,&H00FFFFFF,&H00000000,0,0,0,0,"
         "100,100,0,0,1,0,0,7,0,0,0,1",
@@ -799,19 +915,24 @@ def build_ass(
 
     events: list[str] = []
 
-    def emit(start, end, style, lines, pos_anim_ov, color, fsize, zlayer=3):
+    def emit(start, end, style, lines, pos_anim_ov, color, fsize, zlayer=3, raw=None):
         """1要素を描画。zlayer が大きいほど前面（テロップのレイヤー）。
 
         glow 時は同レイヤに背面(発光)→前面(鮮明)の順で重ねる（同レイヤは記述順＝後が上）。
+        raw はエスケープ済み・インラインタグ入りの本文（カラオケ/1文字入場用）。
         """
-        if not lines:
+        if not lines and raw is None:
             return
+
+        def _dlg(ov):
+            if raw is not None:
+                return f"Dialogue: {zlayer},{_t(start)},{_t(end)},{style},,0,0,0,,{ov}{raw}"
+            return _dialogue(start, end, style, lines, ov, layer=zlayer)
         if is_glow:
-            events.append(_dialogue(start, end, style, lines,
-                                    pos_anim_ov + _glow_group(color, fsize), layer=zlayer))
-            events.append(_dialogue(start, end, style, lines, pos_anim_ov + blur_ov, layer=zlayer))
+            events.append(_dlg(pos_anim_ov + _glow_group(color, fsize)))
+            events.append(_dlg(pos_anim_ov + blur_ov))
         else:
-            events.append(_dialogue(start, end, style, lines, pos_anim_ov + eff_ov + blur_ov, layer=zlayer))
+            events.append(_dlg(pos_anim_ov + eff_ov + blur_ov))
 
     # ウォーターマーク（@ハンドル等のテキスト）。装飾なし・最背面。
     if isinstance(watermark, dict) and str(watermark.get("text", "")).strip():
@@ -873,13 +994,31 @@ def build_ass(
                 events.append(_dialogue(s, e, "Alert", lines, ov, layer=zl))
         elif is_emph:
             # 強調の既定は画面中央（プレビューと同じ (0.5, 0.5)）
-            ov = _pos_tag(tp_pos or {"x": 0.5, "y": 0.5}) + _ANIM_EMPH
+            ov = _pos_tag(tp_pos or {"x": 0.5, "y": 0.5}) + _ANIM_EMPH \
+                + _exit_group(tp.get("exit") or exit_animation, int((e - s) * 1000))
             emit(s, e, "Emphasis", _wrap_static(text, _max_chars(emph_size), cap.max_lines),
                  ov, emph_c, emph_size, zlayer=zl)
         else:   # テロップ個別の position/animation があればクリップ既定を上書き
-            emit(s, e, "Caption", _wrap_static(text, cap_chars, cap.max_lines),
-                 _pos_tag(tp_pos or eff_caption_pos) + _anim_group(tp.get("animation") or animation, "caption", animate),
-                 sub_c, cap_size, zlayer=zl)
+            lines = _wrap_static(text, cap_chars, cap.max_lines)
+            dur_ms = int((e - s) * 1000)
+            anim_sel = (tp.get("animation") or animation or "").lower()
+            style_name, raw = "Caption", None
+            grp = _anim_group(tp.get("animation") or animation, "caption", animate)
+            exit_sel = tp.get("exit") or exit_animation
+            exit_ov = _exit_group(exit_sel, dur_ms)
+            if karaoke:
+                # カラオケは色変化で目立つため、入場は控えめなフェードに固定。
+                # 文字ごとに alpha/scale を持つため \t 退場が効かない → 退場指定時は \fad で抜く。
+                style_name, raw = "Karaoke", _karaoke_text(lines, e - s)
+                grp = r"{\fad(90,260)}" if (exit_sel and exit_sel != "none") else r"{\fad(90,60)}"
+                exit_ov = ""
+            elif anim_sel in _CHAR_ANIMS:
+                raw = _char_anim_text(lines, anim_sel, dur_ms)
+                grp = r"{\fad(0,260)}" if (exit_sel and exit_sel != "none") else r"{\fad(0,80)}"
+                exit_ov = ""
+            emit(s, e, style_name, lines,
+                 _pos_tag(tp_pos or eff_caption_pos) + grp + exit_ov,
+                 sub_c, cap_size, zlayer=zl, raw=raw)
 
     if (effect or "").lower() == "sparkle":
         events.extend(_sparkle_events(clip_duration))
