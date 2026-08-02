@@ -339,6 +339,18 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .ed-tel-chip .ed-h-b { position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
   width: 22px; height: 8px; border-radius: 4px; background: rgba(255,255,255,.75);
   border: 1px solid rgba(0,0,0,.35); cursor: ns-resize; pointer-events: none; }
+/* 字幕の検索・置換バー */
+.ed-find { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 8px 0;
+  padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--accent-2); border-radius: 10px; }
+.ed-find[hidden] { display: none; }
+.ed-find input[type=text] { flex: 1; min-width: 130px; padding: 7px 9px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 7px; color: var(--text); font-size: .85rem; }
+.ed-find-arrow { color: var(--muted); }
+.ed-find-info { font-size: .74rem; color: var(--accent-2); flex-basis: 100%; }
+.ed-find-btn.on { border-color: var(--accent-2); color: var(--accent-2); }
+/* 検索に一致した字幕ブロックを光らせる */
+.ed-block-tel.hit { background: rgba(255,230,0,.28); border-color: #FFE600; }
+
 /* タイムラインの高さ変更バー（下端をドラッグで引き伸ばす） */
 .ed-tl-resize { display: flex; align-items: center; justify-content: center; height: 14px;
   margin-top: 4px; cursor: ns-resize; border-radius: 7px; background: var(--surface-2);

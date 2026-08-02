@@ -92,6 +92,7 @@ E. 強い煽り・掛け合い・名言・パワーワード
 3. 冒頭1〜2秒で掴める区間にする。先頭・末尾の沈黙や「えーっと」は含めない。
 4. **長さは内容で決める（上限なし）**。話が始まってから完結するまでを丸ごと収める。
    {lo}秒未満は絶対に作らないが、「{lo}秒前後にそろえるための機械的な切り詰め」も同じくらい悪い。
+   **全部を同じ長さにしない**（内容が違えば尺も違うはず。{lo}秒ちょうどが並ぶ出力は失敗とみなす）。
    目安: 一言ネタ=20〜40秒、エピソード・掛け合い=30〜90秒、解説/シリアス=60秒〜数分。
    水増しは禁止。ただし短くするために話の一部を欠けさせるのは水増しより悪い。
 5. **境界は「無音・話題の変わり目・笑いが収まった後」に置く。**文の途中・単語の途中・
@@ -114,7 +115,7 @@ E. 強い煽り・掛け合い・名言・パワーワード
 □ 話の頭から始まっているか（前フリを含んだか）
 □ オチ/決着/リアクションまで含んで終わっているか（尺を理由に途中で切っていないか）
 □ 始点・終点が無音や話題の切れ目にあるか（文や単語の途中で切れていないか）
-□ {lo}秒以上あるか
+□ {lo}秒以上あるか（かつ、全クリップが同じような長さに揃っていないか）
 □ 他のクリップと重複していないか
 □ 前後を知らない初見が文脈を理解できるか
 
@@ -125,9 +126,10 @@ E. 強い煽り・掛け合い・名言・パワーワード
 - title: 画面上部の短いタイトル（〜18字）。**その区間で実際に話している内容だけ**を、
   視聴者が中身を正しく予想できる具体的な一言で。誇張・釣り禁止。
 - hook: 冒頭テロップ（〜15字、続きを見たくなる）
-- reason: 推しポイント（なぜ伸びるか一言）
-- caption: TikTok 投稿文（〜80字、絵文字可）
-- hashtags: 3〜5個（#なし・文字列配列）
+- reason: 推しポイント（**30字以内**・なぜ伸びるか一言）
+- caption: TikTok 投稿文（**60字以内**・絵文字可）
+- hashtags: **3個**（#なし・文字列配列）
+※ 応答が途中で切れると全て無効になるため、各項目は上記の字数を必ず守り簡潔に書くこと。
 
 出力は次の JSON のみ（前後に説明文や```を付けない）:
 {{"clips": [{{"start": 0.0, "end": 0.0, "score": 0, "title": "", "hook": "", "reason": "", "caption": "", "hashtags": []}}]}}
@@ -137,11 +139,54 @@ E. 強い煽り・掛け合い・名言・パワーワード
 """
 
 
+def _salvage_json(raw: str) -> str:
+    """途中で切れた／末尾が壊れた JSON を、解釈できる範囲まで復元する。
+
+    LLM 応答は出力上限や稀な生成崩れで末尾が欠けることがある。そのたびに heuristic へ
+    転落すると「AI選定のはずが機械選定」になり品質が大きく落ちるため、
+    完成しているクリップだけでも拾えるように末尾を切り詰めて閉じ括弧を補う。
+    """
+    s = raw.strip()
+    # 末尾の不完全な要素を捨て、最後に完結した } までで打ち切る
+    last = s.rfind("}")
+    if last == -1:
+        return s
+    head = s[:last + 1]
+    # 未閉じの [ / { を数えて閉じる（文字列中の括弧は無視する簡易スキャナ）
+    depth_obj = depth_arr = 0
+    in_str = esc = False
+    for ch in head:
+        if in_str:
+            if esc:
+                esc = False
+            elif ch == "\\":
+                esc = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth_obj += 1
+        elif ch == "}":
+            depth_obj -= 1
+        elif ch == "[":
+            depth_arr += 1
+        elif ch == "]":
+            depth_arr -= 1
+    return head + "]" * max(0, depth_arr) + "}" * max(0, depth_obj)
+
+
 def _parse_llm_json(raw: str) -> list[dict]:
     raw = raw.strip()
     # ```json ... ``` のコードフェンスを除去
     raw = re.sub(r"^```(?:json)?\s*|\s*```$", "", raw, flags=re.IGNORECASE | re.MULTILINE).strip()
-    data = json.loads(raw)
+    try:
+        data = json.loads(raw)
+    except json.JSONDecodeError:
+        fixed = _salvage_json(raw)
+        data = json.loads(fixed)   # ここでも失敗したら呼び出し側がリトライ/フォールバック
+        print("[highlight] LLM応答の末尾が壊れていたため復元して使用", flush=True)
     if isinstance(data, dict):
         for key in ("clips", "highlights", "items", "results"):
             if isinstance(data.get(key), list):
@@ -205,13 +250,25 @@ def _sanitize(
     return out
 
 
+# 盛り上がりの手掛かりになる語（heuristic の加点用）。笑い・驚き・ツッコミ・強い感情。
+_EXCITE_RE = re.compile(r"(ｗｗ|www|笑|えっ|えー|まじ|マジ|やば|ヤバ|すご|スゴ|うわ|うおお|ちょ|"
+                        r"なんで|嘘|うそ|草|ごめん|助け|きた|キタ|勝っ|negative|死ん|やっ(た|ば))")
+
+
 def _heuristic(t: Transcript, clip_count: int) -> list[Highlight]:
-    """API キー無しの代替: 動画を N 分割し、各区間で発話密度が高い窓を切る。"""
+    """API キー無し／LLM 失敗時の代替: 動画を N 分割し、各区間で盛り上がる窓を切る。
+
+    旧実装は「1秒あたりの発話密度」で採点していたため、短い窓ほど高得点になり
+    常に最短（clip_min_sec=18秒）が選ばれていた。総文字数＋感情語で採点し、
+    長さのペナルティを目安尺からの乖離に変えて、内容に応じた尺が出るようにする。
+    """
     duration = t.duration or (t.segments[-1].end if t.segments else 0.0)
     if duration <= 0 or not t.segments:
         return []
     cmin, cmax = SETTINGS.clip_min_sec, SETTINGS.clip_max_sec
-    window_sizes = sorted({cmin, min(22.0, cmax), min(32.0, cmax), min(42.0, cmax)})
+    # 25〜60秒を中心に探索（TikTok で最後まで見られやすい帯）
+    window_sizes = sorted({min(max(cmin, w), cmax) for w in (25.0, 35.0, 45.0, 60.0)})
+    target = 40.0                      # 目安尺（ここから離れるほど減点）
     bucket = duration / clip_count
     highlights: list[Highlight] = []
     for i in range(clip_count):
@@ -228,24 +285,38 @@ def _heuristic(t: Transcript, clip_count: int) -> list[Highlight]:
             for a in anchors:
                 start = max(b_start, min(a, b_end - min(length, b_end - b_start)))
                 end = min(b_end, start + length)
-                if end - start < cmin * 0.75:
+                if end - start < cmin:
                     continue
                 segs = [s for s in in_bucket if s.end > start and s.start < end]
+                if not segs:
+                    continue
+                span = max(1.0, end - start)
                 chars = sum(len(s.text.strip()) for s in segs)
+                excite = sum(len(_EXCITE_RE.findall(s.text)) for s in segs)   # 盛り上がり語
                 speech_span = sum(max(0.0, min(s.end, end) - max(s.start, start)) for s in segs)
-                density = chars / max(1.0, end - start)
-                coverage = speech_span / max(1.0, end - start)
-                score = density * 10.0 + coverage * 25.0 + len(segs) * 1.5 - (end - start) * 0.08
+                coverage = speech_span / span                            # 無音だらけの窓を排除
+                # 情報量は目安尺(target)基準に正規化＝「短いほど有利（旧実装）」でも
+                # 「長いほど有利」でもなく、中身の濃い区間が選ばれるようにする。
+                score = (chars * (target / span) ** 0.5 + excite * 12.0 + coverage * 40.0
+                         - abs(span - target) * 2.5)
+                # 区間の頭が発話の途中だと文脈が切れる → 発話開始に近いほど加点
+                head_gap = min((abs(s.start - start) for s in segs), default=9.9)
+                score += max(0.0, 6.0 - head_gap * 2.0)
                 if best is None or score > best[0]:
                     best = (score, start, end)
         if best is None:
             peak = max(in_bucket, key=lambda s: len(s.text))
             center = (peak.start + peak.end) / 2
-            start = max(b_start, center - cmin / 2)
-            end = min(duration, start + cmin)
-            start = max(0.0, end - cmin)
+            fb_len = min(target, max(cmin, b_end - b_start))
+            start = max(b_start, center - fb_len / 2)
+            end = min(duration, start + fb_len)
+            start = max(0.0, end - fb_len)
         else:
             _, start, end = best
+            # 終端が発話の途中なら、その発話の終わりまで伸ばす（オチの途中切りを防ぐ）
+            tail = [s for s in in_bucket if s.start < end < s.end]
+            if tail:
+                end = min(b_end, duration, max(s.end for s in tail) + 0.3)
 
         text = " ".join(s.text for s in t.segments if start <= s.start < end)
         title = (text[:18] + "…") if len(text) > 18 else text
@@ -472,23 +543,31 @@ def select_highlights(
     gmin = max(genre_mod.HARD_MIN_SEC, gmin)
 
     if provider_name != "heuristic":
-        try:
-            raw = provider.generate_json(_build_prompt(
-                t, clip_count, meta_title, loud_moments,
-                min_sec=gmin, max_sec=gmax, genre_block=g_block,
-                user_prompt=user_prompt or "",
-            ))
-            items = _parse_llm_json(raw)
-            highlights = _sanitize(items, t.duration, clip_count, min_sec=gmin, max_sec=gmax)
-            if highlights:
-                # 本数が不足していれば未使用区間から補完して clip_count を保証（#25）
-                if len(highlights) < clip_count:
-                    before = len(highlights)
-                    highlights = _supplement(highlights, t, clip_count, min_sec=gmin, max_sec=gmax)
-                    print(f"[highlight] LLM {before}本 → 補完して {len(highlights)}本", flush=True)
-                return highlights, provider_name
-        except Exception as e:  # noqa: BLE001
-            # キー/モデル不正・通信・JSON 崩れ等はすべて heuristic にフォールバック
-            print(f"[highlight] LLM 失敗 ({type(e).__name__}: {e}) → heuristic", flush=True)
+        prompt = _build_prompt(
+            t, clip_count, meta_title, loud_moments,
+            min_sec=gmin, max_sec=gmax, genre_block=g_block,
+            user_prompt=user_prompt or "",
+        )
+        # JSON 崩れは稀に起きる（生成の揺らぎ）。heuristic へ落ちると選定品質が大きく下がるため、
+        # 解析に失敗したら作り直しを 1 回試す（キー/課金エラー等は即フォールバック）。
+        for attempt in range(2):
+            try:
+                items = _parse_llm_json(provider.generate_json(prompt))
+                highlights = _sanitize(items, t.duration, clip_count, min_sec=gmin, max_sec=gmax)
+                if highlights:
+                    # 本数が不足していれば未使用区間から補完して clip_count を保証（#25）
+                    if len(highlights) < clip_count:
+                        before = len(highlights)
+                        highlights = _supplement(highlights, t, clip_count, min_sec=gmin, max_sec=gmax)
+                        print(f"[highlight] LLM {before}本 → 補完して {len(highlights)}本", flush=True)
+                    return highlights, provider_name
+                print("[highlight] LLM 応答に有効なクリップが無し", flush=True)
+            except (json.JSONDecodeError, ValueError) as e:
+                print(f"[highlight] LLM応答の解析に失敗 ({type(e).__name__}: {e})"
+                      f"{' → 作り直し' if attempt == 0 else ' → heuristic'}", flush=True)
+                continue
+            except Exception as e:  # noqa: BLE001  キー/課金/通信エラー等は即フォールバック
+                print(f"[highlight] LLM 失敗 ({type(e).__name__}: {e}) → heuristic", flush=True)
+                break
 
     return _heuristic(t, clip_count), "heuristic"

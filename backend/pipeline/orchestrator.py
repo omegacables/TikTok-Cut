@@ -390,6 +390,11 @@ def run_job(
         duration=duration,
         provider=provider_name,
     )
+    # AI選定が使えず簡易選定に落ちた場合はUIに明示する（黙って品質が落ちるのを防ぐ）。
+    # 原因（APIキー未設定・課金上限・通信エラー等）は backend.log の [highlight] 行に出る。
+    if provider_name == "heuristic" and SETTINGS.llm_provider != "heuristic":
+        result.warning = ("AI選定が使えなかったため簡易選定（発話量ベース）で切り抜きました。"
+                          "設定のAPIキー・通信状態をご確認ください")
     if not highlights:
         result.warning = "ハイライトを検出できませんでした"
         (job_dir / "result.json").write_text(

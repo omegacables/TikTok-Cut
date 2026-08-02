@@ -1530,6 +1530,123 @@ document.addEventListener('keydown', e => {
     if (edDeleteSelection(ed)) e.preventDefault();
   }
 });
+// ===== 字幕の検索・置換（1件ずつ／すべて置換） =====
+// 文字起こしの言い間違い・固有名詞の誤変換をまとめて直す用途。置換は Undo(Ctrl+Z) で戻せる。
+function edToggleFind(btn) {
+  const ed = btn.closest('.clip-editor'); if (!ed) return;
+  const p = ed.querySelector('.ed-find'); if (!p) return;
+  p.hidden = !p.hidden;
+  btn.classList.toggle('on', !p.hidden);
+  if (!p.hidden) {
+    edWireFind(ed);
+    const q = p.querySelector('.ed-find-q'); if (q) q.focus();
+  } else {
+    ed.querySelectorAll('.ed-tl-tel .ed-block').forEach(n => n.classList.remove('hit'));
+  }
+}
+function _edFindQuery(ed) {
+  const e = ed.querySelector('.ed-find-q');
+  return e ? e.value : '';
+}
+// 検索語を含むテロップの index 一覧（タイムライン上でも該当ブロックを光らせる）
+function edFindHits(ed) {
+  const q = _edFindQuery(ed);
+  const hits = [];
+  if (q) {
+    (ed._telops || []).forEach((tp, i) => { if ((tp.text || '').indexOf(q) >= 0) hits.push(i); });
+  }
+  ed.querySelectorAll('.ed-tl-tel .ed-block').forEach(n => {
+    n.classList.toggle('hit', hits.indexOf(+n.dataset.i) >= 0);
+  });
+  const info = ed.querySelector('.ed-find-info');
+  if (info) {
+    const titleHit = _edFindInTitle(ed) && q && ((ed.querySelector('.ed-title') || {}).value || '').indexOf(q) >= 0;
+    info.textContent = !q ? '' : (hits.length + '件' + (titleHit ? '（＋タイトル）' : '')
+      + (hits.length ? '' : ' 見つかりません'));
+  }
+  return hits;
+}
+function _edFindInTitle(ed) {
+  const c = ed.querySelector('.ed-find-title');
+  return !!(c && c.checked);
+}
+function edFindNext(ed) {
+  const hits = edFindHits(ed);
+  if (!hits.length) return null;
+  // 現在の選択より後ろの最初の一致へ（末尾まで行ったら先頭へ戻る）
+  const cur = ed._selTelop;
+  const next = hits.find(i => i > cur);
+  const idx = (next === undefined) ? hits[0] : next;
+  edSelectTelop(ed, idx);
+  const blk = ed.querySelector('.ed-tl-tel .ed-block[data-i="' + idx + '"]');
+  if (blk) blk.scrollIntoView({ block: 'center' });
+  return idx;
+}
+function edReplaceOne(ed) {
+  const q = _edFindQuery(ed); if (!q) return;
+  const r = (ed.querySelector('.ed-find-r') || {}).value || '';
+  const info = ed.querySelector('.ed-find-info');
+  // 選択中の字幕に一致が無ければ、まず次の一致へ移動してから置換する
+  let i = ed._selTelop;
+  if (!(ed._telops || [])[i] || (ed._telops[i].text || '').indexOf(q) < 0) {
+    i = edFindNext(ed);
+    if (i == null) return;
+  }
+  edPushUndo(ed);
+  ed._telops[i].text = (ed._telops[i].text || '').replace(q, r);   // その字幕の最初の1件だけ
+  edRenderTelopBlocks(ed); edRenderSelTelop(ed); renderPreviewTelops(ed);
+  const rest = edFindHits(ed);
+  if (info) info.textContent = '1件を置換しました（残り' + rest.length + '件）';
+}
+function edReplaceAll(ed) {
+  const q = _edFindQuery(ed); if (!q) return;
+  const r = (ed.querySelector('.ed-find-r') || {}).value || '';
+  const info = ed.querySelector('.ed-find-info');
+  const parts = q.length;
+  let n = 0;
+  edPushUndo(ed);
+  (ed._telops || []).forEach(tp => {
+    const t = tp.text || '';
+    if (t.indexOf(q) < 0) return;
+    n += t.split(q).length - 1;
+    tp.text = t.split(q).join(r);
+  });
+  let titleN = 0;
+  if (_edFindInTitle(ed)) {
+    const ti = ed.querySelector('.ed-title');
+    if (ti && ti.value.indexOf(q) >= 0) {
+      titleN = ti.value.split(q).length - 1;
+      ti.value = ti.value.split(q).join(r);
+      updateEditorPreview(ed);
+    }
+  }
+  edRenderTelopBlocks(ed); edRenderSelTelop(ed); renderPreviewTelops(ed);
+  edFindHits(ed);
+  if (info) {
+    info.textContent = (n + titleN) ? ('✓ ' + n + '件を置換しました'
+      + (titleN ? '（タイトル' + titleN + '件を含む）' : '') + ' ／ Ctrl+Zで取り消せます')
+      : '該当がありませんでした';
+  }
+  void parts;
+}
+function edWireFind(ed) {
+  const p = ed.querySelector('.ed-find'); if (!p || p.dataset.wired) return;
+  p.dataset.wired = '1';
+  p.querySelector('.ed-find-q').addEventListener('input', () => edFindHits(ed));
+  p.querySelector('.ed-find-title').addEventListener('change', () => edFindHits(ed));
+  p.querySelector('.ed-find-next').addEventListener('click', () => edFindNext(ed));
+  p.querySelector('.ed-find-one').addEventListener('click', () => edReplaceOne(ed));
+  p.querySelector('.ed-find-all').addEventListener('click', () => edReplaceAll(ed));
+  // Enter=次を検索 / Ctrl+Enter=すべて置換（入力欄からそのまま操作できるように）
+  p.querySelectorAll('.ed-find-q, .ed-find-r').forEach(inp => {
+    inp.addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      e.preventDefault();
+      if (e.ctrlKey || e.metaKey) edReplaceAll(ed); else edFindNext(ed);
+    });
+  });
+}
+
 // 一括設定セクション（字幕/タイトル/画面構成）の開閉。既定は全て閉＝個別編集をメインに。
 const ED_SEC_LABEL = { cap: '💬 字幕一括設定', ttl: '🏷 タイトル一括設定', scr: '🖥 画面構成設定' };
 function edToggleSection(btn) {
@@ -2465,9 +2582,22 @@ async function loadEditor(ed) {
             '<button type="button" class="mini-btn" onclick="edZoomBtn(this,1)">＋</button></span>' +
           '<button type="button" class="mini-btn" onclick="edAddCut(this)" title="再生位置にカット範囲を追加。やり直すときはカット範囲の✕で個別取消、または「初期に戻す」で全部戻せます">✂ カット範囲</button>' +
           '<button type="button" class="mini-btn" onclick="edTlReset(this)" title="字幕・カットを生成直後の状態に戻します（カットしすぎたときもこれで元に戻せます）">初期に戻す</button>' +
+          '<button type="button" class="mini-btn ed-find-btn" onclick="edToggleFind(this)" title="字幕の文字を検索して置換します（1件ずつ／すべて）">🔍 検索・置換</button>' +
           '<select class="ed-bulk-anim" onchange="edBulkAnim(this)">' +
             '<option value="">全テロップのアニメ…</option>' + optionsHtml(ANIM_OPTS, '_skip_') + '</select>' +
         '</div>' +
+      '</div>' +
+      // 字幕の検索・置換（1件ずつ／すべて置換）
+      '<div class="ed-find" hidden>' +
+        '<span class="ed-pal-lbl">🔍 字幕の検索・置換</span>' +
+        '<input class="ed-find-q" type="text" placeholder="検索する文字">' +
+        '<span class="ed-find-arrow">→</span>' +
+        '<input class="ed-find-r" type="text" placeholder="置換後の文字（空欄＝削除）">' +
+        '<label class="ed-flag" title="タイトルも検索・置換の対象にします"><input type="checkbox" class="ed-find-title">タイトルも</label>' +
+        '<button type="button" class="mini-btn ed-find-next">次を検索</button>' +
+        '<button type="button" class="mini-btn ed-find-one">置換</button>' +
+        '<button type="button" class="mini-btn ed-find-all">すべて置換</button>' +
+        '<span class="ed-find-info"></span>' +
       '</div>' +
       // 選択中の字幕/効果音/画像の編集パネル（タイムライン直上＝メインの編集UI）
       '<div class="ed-sel-tel" hidden></div>' +

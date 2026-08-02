@@ -89,15 +89,28 @@ def _gemini(prompt: str, temperature: float) -> str:
         raise LLMUnavailable(f"google-genai 未導入: {e}") from e
 
     client = genai.Client(api_key=SETTINGS.gemini_api_key)
-    resp = client.models.generate_content(
-        model=SETTINGS.llm_model,
-        contents=prompt,
-        config=types.GenerateContentConfig(
-            temperature=temperature,
-            response_mime_type="application/json",
-        ),
-    )
-    return resp.text or ""
+    # max_output_tokens を明示（既定任せだと thinking にトークンを食われ、JSON が
+    # 途中で切れて JSONDecodeError → heuristic 転落する事故が起きる）。
+    cfg = dict(temperature=temperature, response_mime_type="application/json",
+               max_output_tokens=8192)
+    try:
+        resp = client.models.generate_content(
+            model=SETTINGS.llm_model, contents=prompt,
+            config=types.GenerateContentConfig(**cfg))
+    except TypeError:   # 古い SDK で未対応のキーがある場合は最小構成で再試行
+        resp = client.models.generate_content(
+            model=SETTINGS.llm_model, contents=prompt,
+            config=types.GenerateContentConfig(
+                temperature=temperature, response_mime_type="application/json"))
+    text = resp.text or ""
+    # 出力上限で切れた場合は、その旨を呼び出し側（highlight）が判別できるよう明示する
+    try:
+        fr = str(resp.candidates[0].finish_reason)
+        if "MAX_TOKENS" in fr and text:
+            print(f"[llm] 応答が出力上限で切れました（{len(text)}文字）", flush=True)
+    except Exception:   # noqa: BLE001  メタ情報が無い SDK でも本文は返す
+        pass
+    return text
 
 
 def _openai(prompt: str, temperature: float) -> str:
