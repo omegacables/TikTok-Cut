@@ -851,6 +851,7 @@ html { font-size: 108%; }
   color: var(--text); font-size: .8rem; cursor: pointer; max-width: 190px; }
 .fxp-btn:hover { border-color: var(--accent-2); }
 .fxp-cur { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fxp-btn .fxp-sample { display: none; }   /* ボタン側はラベルのみ（メニュー内でデモを見せる） */
 .fxp-menu { position: fixed; z-index: 1200; display: grid;
   grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; width: 340px;
   max-height: 320px; overflow-y: auto; padding: 10px; background: #14161c;
@@ -862,6 +863,27 @@ html { font-size: 108%; }
 .fxp-sample { display: inline-block; font-weight: 800; font-size: 1.02rem; color: #fff;
   -webkit-text-stroke: .5px #000; line-height: 1.4; min-height: 1.5em; }
 .fxp-name { font-size: .64rem; color: var(--muted); text-align: center; line-height: 1.2; }
+/* 冒頭トランジションのデモ: ミニ画面（9:16寄り）がその動きでループする */
+.fxp-frame { width: 42px; height: 56px; border-radius: 4px; overflow: hidden; position: relative;
+  background: #0d0f14; border: 1px solid rgba(255,255,255,.18); -webkit-text-stroke: 0; }
+.fxp-frame-in { position: absolute; inset: 0;
+  background: linear-gradient(150deg, #25f4ee 0%, #2a6cf6 45%, #ff2d55 100%); }
+.fxp-frame-in::after { content: ''; position: absolute; left: 6px; right: 6px; bottom: 7px; height: 5px;
+  border-radius: 2px; background: rgba(255,255,255,.85); }
+@keyframes pvTrFade { 0% { opacity: 0; } 30%,100% { opacity: 1; } }
+@keyframes pvTrFlash { 0% { filter: brightness(6); } 22%,100% { filter: brightness(1); } }
+@keyframes pvTrZoom { 0% { transform: scale(1.35); } 35%,100% { transform: scale(1); } }
+@keyframes pvTrZoomOut { 0% { transform: scale(1.9); } 40%,100% { transform: scale(1); } }
+@keyframes pvTrSlide { 0% { transform: translateX(-100%); } 35%,100% { transform: translateX(0); } }
+@keyframes pvTrSlideDown { 0% { transform: translateY(-100%); } 35%,100% { transform: translateY(0); } }
+@keyframes pvTrSpin { 0% { transform: rotate(-40deg) scale(1.5); } 40%,100% { transform: rotate(0) scale(1); } }
+@keyframes pvTrShake { 0% { transform: translate(3px,-2px); } 8% { transform: translate(-3px,2px); }
+  16% { transform: translate(2px,2px); } 24% { transform: translate(-2px,-1px); }
+  32%,100% { transform: translate(0,0); } }
+@keyframes pvTrGlitch { 0% { transform: translateX(4px); filter: hue-rotate(90deg) saturate(3); }
+  6% { transform: translateX(-4px); filter: hue-rotate(-90deg) saturate(3); }
+  12%,100% { transform: translateX(0); filter: none; } }
+
 /* 退場アニメのループプレビュー（出て→消える） */
 @keyframes pvExFade { 0%,35% { opacity: 1; } 85%,100% { opacity: 0; } }
 @keyframes pvExShrink { 0%,35% { transform: scale(1); opacity: 1; } 90%,100% { transform: scale(.25); opacity: 0; } }

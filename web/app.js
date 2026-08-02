@@ -584,7 +584,19 @@ function _fxCloseMenu() {
   document.removeEventListener('pointerdown', _fxDocClose, true);
 }
 function _fxDocClose(e) { if (_fxMenuEl && !_fxMenuEl.contains(e.target)) _fxCloseMenu(); }
+// 冒頭トランジション（映像全体の動き）のデモ。ミニ画面がその動きでループする。
+const PV_INTRO = {
+  none: '', fade: 'pvTrFade', flash: 'pvTrFlash', zoom: 'pvTrZoom', zoomout: 'pvTrZoomOut',
+  slide: 'pvTrSlide', slidedown: 'pvTrSlideDown', spin: 'pvTrSpin', shake: 'pvTrShake',
+  glitch: 'pvTrGlitch',
+};
 function _fxSample(el, kind, v) {
+  if (kind === 'intro') {
+    const inner = el.querySelector('.fxp-frame-in');
+    const name = PV_INTRO[v || 'none'];
+    if (inner && name) inner.style.animation = name + ' 1.8s ease-out infinite';
+    return;
+  }
   if (kind === 'effect') { _pvApplyEff(el, v || 'none'); return; }
   if (kind === 'anim') {
     const a = v || 'default';
@@ -609,11 +621,15 @@ function fxPickerify(sel, kind) {
   sel.style.display = 'none';
   const btn = document.createElement('button');
   btn.type = 'button'; btn.className = 'fxp-btn';
+  const sampleHtml = (kind === 'intro')
+    ? '<span class="fxp-sample fxp-frame"><span class="fxp-frame-in"></span></span>'
+    : '<span class="fxp-sample">あア文字</span>';
   const sync = () => {
     const o = sel.options[sel.selectedIndex];
     btn.innerHTML = '<span class="fxp-cur">' + esc(o ? o.textContent : '') + '</span><span>▾</span>';
     if (kind === 'effect') _pvApplyEff(btn.querySelector('.fxp-cur'), sel.value || 'none');
   };
+  sel._fxpSync = sync;   // テンプレ適用などで value を書き換えた後の表示更新用
   sync();
   sel.insertAdjacentElement('afterend', btn);
   btn.addEventListener('click', e => {
@@ -625,7 +641,7 @@ function fxPickerify(sel, kind) {
       const it = document.createElement('button');
       it.type = 'button';
       it.className = 'fxp-item' + (o.value === sel.value ? ' sel' : '');
-      it.innerHTML = '<span class="fxp-sample">あア文字</span><span class="fxp-name">' + esc(o.textContent) + '</span>';
+      it.innerHTML = sampleHtml + '<span class="fxp-name">' + esc(o.textContent) + '</span>';
       _fxSample(it.querySelector('.fxp-sample'), kind, o.value);
       it.addEventListener('click', () => {
         sel.value = o.value;
@@ -2160,6 +2176,11 @@ function applyStyleObj(s) {
   _styleEffect = s.effect || 'none';   // テンプレの文字エフェクト（UIなし・送信時に _effSel() が返す）
   set('shadowD', s.shadowD); set('shadowA', s.shadowA); set('shadowB', s.shadowB);
   if (typeof s.box === 'boolean') document.getElementById('boxOn').checked = s.box;
+  // 見た目つきピッカーのボタン表示を選択値に追従（value を全て入れ終えてから同期する）
+  ['animSelect', 'exitSelect', 'intro'].forEach(id => {
+    const e = document.getElementById(id);
+    if (e && e._fxpSync) e._fxpSync();
+  });
   syncSliderLabels(); updateFontPreview(); updatePreviewColors(); applyPreviewFx();
 }
 // 作成ページの「見た目テンプレ」チップ（ワンタップ適用）
@@ -2250,7 +2271,8 @@ function wireStyleMemory() {
 
 (async () => {
   await loadPrefs();          // プリセット等をサーバから先に読み込む（起動間で永続）
-  initFonts();                // restoreLastStyle が _prefs を参照
+  await initFonts();          // restoreLastStyle が _prefs を参照。
+                              // 先に完了させないと、後段のピッカーが復元前の値でラベルを作る
   renderPalette();
   updatePreviewColors();
   initGenres();
@@ -2260,6 +2282,10 @@ function wireStyleMemory() {
   updateBrandHint();
   await applyBrandSettings();  // ウォーターマーク/ロゴ 表示トグルを設定値から復元（設定未オープンでも有効）
   wireStyleMemory();
+  // 作成ページのアニメ／トランジションも「見た目つきピッカー」で選ぶ（詳細編集と同じ体験）
+  fxPickerify(document.getElementById('animSelect'), 'anim');
+  fxPickerify(document.getElementById('exitSelect'), 'exit');
+  fxPickerify(document.getElementById('intro'), 'intro');
   applyPreviewFx();
   onReframeChange();
 })();
