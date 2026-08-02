@@ -2,13 +2,14 @@ r"""字幕（テロップ）を ASS で生成する。
 
 - 静的表示（カラオケ無し）。1テロップ＝1〜2行を、その発話区間だけ表示。
 - 日本語はスペースが無く libass が自動折返しできないため、フォント幅から1行最大文字数を
-  算出し `\N` で手動折返し（はみ出し防止）。「。！？」で次テロップ、「、」で改行。
+  算出し `\N` で手動折返し（はみ出し防止）。「。！？」で次テロップ（読点「、」では改行しない）。
 - 編集単位は「テロップ」= {start, end, text, (style)}。`segment()` で words → telops、
   `build_ass(telops=...)` で telops → ASS。手動修正UIはこの telops を編集して再描画する。
 - style="alert" のテロップは Twitch 風アラート様式（上部バナー・別色・背景ボックス）で表示。
 """
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from ..config import OUTPUT_H, OUTPUT_W, SETTINGS, CaptionStyle, TitleStyle
@@ -126,18 +127,50 @@ _EFFECT_TAGS = {
     "gold": r"{\1c&H1CC3FF&\3c&H0E5C8F&\bord4\blur0.8}",
 }
 
-# 虹色: \1c を \t で順に回す（7色×450ms×2周 ≒ 6.3秒。それ以上の長尺は最後の色で静止）
+# 虹色（パチンコの虹演出風）: 高速で色相を回し続ける＋白フチ発光。ユーザー要望で
+# 「ゆっくり2周で静止」→「速いサイクルで止まらない」に変更（約20秒ぶん生成＝実用上の常時）。
 _RAINBOW_COLS = ["&H0000FF&", "&H0099FF&", "&H00FFFF&", "&H00FF00&", "&HFFFF00&", "&HFF6640&", "&HFF00CC&"]
 
 
 def _rainbow_tags() -> str:
-    step = 450
-    parts = []
-    for loop in range(2):
-        for i, c in enumerate(_RAINBOW_COLS):
-            t0 = (loop * len(_RAINBOW_COLS) + i) * step
-            parts.append(rf"\t({t0},{t0 + step},\1c{c})")
+    step = 140   # 1色あたりms（7色≒1秒で1周）
+    parts = [r"\3c&HFFFFFF&\bord3\blur1.2"]   # 白フチ＋にじみ＝発光感
+    t = 0
+    i = 0
+    while t < 20000:
+        parts.append(rf"\t({t},{t + step},\1c{_RAINBOW_COLS[i % len(_RAINBOW_COLS)]})")
+        t += step
+        i += 1
     return "{" + "".join(parts) + "}"
+
+
+def _rainbow_wave_text(lines: list[str], dur_ms: int) -> str:
+    """文字ごとに位相をずらした虹色サイクル＝虹が文字列を波のように流れる（パチンコ虹の本命）。
+
+    行折返しは保ったまま、各文字に開始色と \\t サイクルをインラインで付与する。
+    白フチ発光は行頭の共通タグで付ける。サイクルは最大約8.4秒（通常テロップ尺を十分カバー）。
+    """
+    step = 140
+    ncol = len(_RAINBOW_COLS)
+    steps = max(ncol, min(60, (dur_ms // step) + 1))
+    chars: list[str] = []
+    for li, ln in enumerate(lines):
+        if li:
+            chars.append("\\N")
+        chars.extend(_escape(ln))
+    out = [r"{\3c&HFFFFFF&\bord3\blur1.2}"]
+    k = 0
+    for c in chars:
+        if c == "\\N":
+            out.append(c)
+            continue
+        tags = [rf"\1c{_RAINBOW_COLS[k % ncol]}"]
+        for i in range(steps):
+            t0 = i * step
+            tags.append(rf"\t({t0},{t0 + step},\1c{_RAINBOW_COLS[(k + i + 1) % ncol]})")
+        out.append("{" + "".join(tags) + "}" + c)
+        k += 1
+    return "".join(out)
 
 
 def _jitter_tags() -> str:
@@ -152,6 +185,20 @@ def _jitter_tags() -> str:
         t += 110
     parts.append(rf"\t({t},{t + 110},\frz0)")
     return "{" + "".join(parts) + "}"
+
+
+# 入場/退場アニメの速度変更: override 内の \fad/\t の時間(ms)を 1/speed 倍する（speed 2=倍速）。
+# 文字エフェクト（jitter/rainbow 等の常時演出）には適用しない＝入退場の「動きの速さ」だけ変える。
+_ANIM_MS_RE = re.compile(r"\\(fad|t)\((\d+),(\d+)")
+
+
+def _scale_anim_ms(ov: str, speed: float) -> str:
+    if not ov or speed <= 0 or abs(speed - 1.0) < 1e-3:
+        return ov
+    f = 1.0 / speed
+    return _ANIM_MS_RE.sub(
+        lambda m: f"\\{m.group(1)}({max(0, int(int(m.group(2)) * f))},{max(1, int(int(m.group(3)) * f))}",
+        ov)
 
 
 def _exit_group(exit_animation: str | None, dur_ms: int) -> str:
@@ -176,16 +223,16 @@ def _exit_group(exit_animation: str | None, dur_ms: int) -> str:
 _CHAR_ANIMS = ("stagger", "typewriter")
 
 
-def _char_anim_text(lines: list[str], kind: str, dur_ms: int) -> str:
+def _char_anim_text(lines: list[str], kind: str, dur_ms: int, speed: float = 1.0) -> str:
     chars: list[str] = []
     for li, ln in enumerate(lines):
         if li:
             chars.append("\\N")
         chars.extend(_escape(ln))
     n = max(1, sum(1 for c in chars if c != "\\N"))
-    # 入場全体は最大600ms・表示時間の半分まで（短いテロップで出終わらないのを防ぐ）
-    total = min(600, int(dur_ms * 0.5))
-    delay = max(18, min(60, total // n))
+    # 入場全体は最大600ms・表示時間の半分まで（短いテロップで出終わらないのを防ぐ）。speed で加速/減速。
+    total = int(min(600, int(dur_ms * 0.5)) / max(0.25, speed))
+    delay = max(6, min(120, total // n))
     out: list[str] = []
     k = 0
     for c in chars:
@@ -296,17 +343,28 @@ def _comment_events(text: str, start: float, end: float, *, text_x: int, y: int,
     ]
 
 
-def _sparkle_events(clip_duration: float) -> list[str]:
-    """キラキラ＝瞬く★粒子を描画イベントとして重ねる（粒子の近似・明示）。"""
-    if clip_duration <= 0:
+def _sparkle_events(t0: float, t1: float, center: tuple[float, float] | None = None) -> list[str]:
+    """キラキラ＝瞬く★粒子を描画イベントとして重ねる（粒子の近似・明示）。
+
+    t0〜t1 の間だけ瞬かせる。center=(cx,cy) 指定時はその周囲（テロップ個別エフェクト用）、
+    未指定は従来の画面上部配置（クリップ全体エフェクト用）。
+    """
+    if t1 <= t0:
         return []
+    if center is None:
+        pts = _SPARKLE_PTS
+    else:
+        cx, cy = center
+        offs = [(-0.17, -0.07), (0.17, -0.06), (-0.10, 0.06), (0.10, 0.07),
+                (0.0, -0.10), (-0.23, 0.01), (0.23, 0.02)]
+        pts = [(min(0.97, max(0.03, cx + dx)), min(0.97, max(0.03, cy + dy))) for dx, dy in offs]
     events: list[str] = []
     period, n = 1.1, 0
-    for i, (fx, fy) in enumerate(_SPARKLE_PTS):
+    for i, (fx, fy) in enumerate(pts):
         x, y = int(fx * OUTPUT_W), int(fy * OUTPUT_H)
-        t = (i % 5) * 0.22                       # 位相をずらして瞬かせる
-        while t < clip_duration and n < 40:
-            end = min(clip_duration, t + 0.62)
+        t = t0 + (i % 5) * 0.22                  # 位相をずらして瞬かせる
+        while t < t1 and n < 40:
+            end = min(t1, t + 0.62)
             ov = (f"{{\\an5\\pos({x},{y})\\frz{(i * 37) % 360}\\fscx0\\fscy0\\alpha&H30&"
                   f"\\t(0,300,\\fscx120\\fscy120\\alpha&H00&)"
                   f"\\t(300,600,\\fscx0\\fscy0\\alpha&H40&)}}")
@@ -324,6 +382,21 @@ def _clamp(val, lo: float, hi: float, default: float) -> float:
         return max(lo, min(hi, float(val)))
     except (TypeError, ValueError):
         return default
+
+
+def _style_override_tags(font: str | None, color: str | None, outline_color: str | None,
+                         size: int | None) -> str:
+    """テロップ個別のフォント/文字色/縁色/サイズを ASS インラインタグにする（{}込み・無指定は ""）。"""
+    parts: list[str] = []
+    if font:
+        parts.append(rf"\fn{font}")
+    if size:
+        parts.append(rf"\fs{int(size)}")
+    if color:
+        parts.append(rf"\1c{_ass_color(color)}")
+    if outline_color:
+        parts.append(rf"\3c{_ass_color(outline_color)}")
+    return "{" + "".join(parts) + "}" if parts else ""
 
 
 def _pos_tag(pos: dict | None) -> str:
@@ -444,8 +517,9 @@ def _disp_len(s: str) -> int:
 def _wrap_lines(text: str, max_chars: int, max_lines: int | None = None) -> list[str]:
     """単語境界（日本語は単位化）で詰めて折返した行のリスト。max_lines=None なら全行を返す。
 
-    「、」で改行・「。」除去・「！？」は行末に保持。助詞・助動詞・長音などの付属語は
-    行頭に置かない（単語/カタカナ語を途中で割らない）。
+    「。」除去・「！？」は行末に保持。読点「、」では改行しない（幅あふれ時のみ折返し・
+    行末の読点は落とす）。助詞・助動詞・長音などの付属語は行頭に置かない
+    （単語/カタカナ語を途中で割らない）。
     """
     text = text.strip().replace("\n", "")
     if not text:
@@ -468,10 +542,7 @@ def _wrap_lines(text: str, max_chars: int, max_lines: int | None = None) -> list
     for tk in toks:
         if tk in "。．":
             continue
-        if tk in _PAUSE_MARK:           # 読点で改行
-            if line:
-                push()
-            continue
+        # 読点「、」は改行トリガーにしない（そのまま行内に残し、行末の読点は push() が落とす）
         keep = tk in "！？!?"           # 感嘆/疑問は行末に残す
         attached = _is_attached(tk)     # 助詞・助動詞・長音は行頭に置かない
         cand = (line + joiner + tk) if line else tk
@@ -794,6 +865,7 @@ def build_ass(
     exit_animation: str | None = None,   # 退場アニメ（none/fade/shrink/blurout/flip）
     karaoke: bool = False,               # 単語カラオケ（しゃべった所まで highlight_color に変わる）
     effect: str | None = None,
+    animation_speed: float | None = None,   # 入退場アニメの速度倍率（0.25〜3・1=標準）
     caption_size: float | None = None,
     caption_width: float | None = None,   # 字幕の折返し幅（0.35〜0.95・既定 _WIDTH_RATIO）
     title_size: float | None = None,
@@ -828,6 +900,7 @@ def build_ass(
     ttl_c = title_color or ttl.primary_hex
     ttl_out_c = title_outline_color or ttl.outline_hex
     emph_c = emphasis_color or "#FFE600"
+    spd = _clamp(animation_speed, 0.25, 3.0, 1.0)   # クリップ全体のアニメ速度
 
     # サイズ・縁取りの上書き（UI スライダー／字幕プリセット）。安全な範囲にクランプ。
     cap_size = int(_clamp(caption_size, 36, 140, cap.font_size))
@@ -915,11 +988,12 @@ def build_ass(
 
     events: list[str] = []
 
-    def emit(start, end, style, lines, pos_anim_ov, color, fsize, zlayer=3, raw=None):
+    def emit(start, end, style, lines, pos_anim_ov, color, fsize, zlayer=3, raw=None, eff=None):
         """1要素を描画。zlayer が大きいほど前面（テロップのレイヤー）。
 
         glow 時は同レイヤに背面(発光)→前面(鮮明)の順で重ねる（同レイヤは記述順＝後が上）。
         raw はエスケープ済み・インラインタグ入りの本文（カラオケ/1文字入場用）。
+        eff はテロップ個別エフェクト（None=クリップ既定に従う・"none"=明示的に無し）。
         """
         if not lines and raw is None:
             return
@@ -928,11 +1002,13 @@ def build_ass(
             if raw is not None:
                 return f"Dialogue: {zlayer},{_t(start)},{_t(end)},{style},,0,0,0,,{ov}{raw}"
             return _dialogue(start, end, style, lines, ov, layer=zlayer)
-        if is_glow:
+        glow = is_glow if eff is None else (str(eff).lower() == "glow")
+        e_ov = eff_ov if eff is None else ("" if glow else _effect_group(eff))
+        if glow:
             events.append(_dlg(pos_anim_ov + _glow_group(color, fsize)))
             events.append(_dlg(pos_anim_ov + blur_ov))
         else:
-            events.append(_dlg(pos_anim_ov + eff_ov + blur_ov))
+            events.append(_dlg(pos_anim_ov + e_ov + blur_ov))
 
     # ウォーターマーク（@ハンドル等のテキスト）。装飾なし・最背面。
     if isinstance(watermark, dict) and str(watermark.get("text", "")).strip():
@@ -956,10 +1032,11 @@ def build_ass(
 
     if title.strip():
         emit(0.0, clip_duration, "Title", _wrap_static(title, ttl_chars, 2),
-             _pos_tag(eff_title_pos) + _anim_group(animation, "title", animate), ttl_c, ttl_size)
+             _pos_tag(eff_title_pos) + _scale_anim_ms(_anim_group(animation, "title", animate), spd),
+             ttl_c, ttl_size)
     if hook.strip():
         emit(0.0, min(2.2, clip_duration), "Hook", _wrap_static(hook, _max_chars(hook_size), 2),
-             _anim_group(animation, "hook", animate), "#FFE600", hook_size)
+             _scale_anim_ms(_anim_group(animation, "hook", animate), spd), "#FFE600", hook_size)
     # 字幕タイミング微調整（編集UIの sub_offset・±2s）。負=早める/正=遅らせる。
     try:
         sub_off = max(-2.0, min(2.0, float(sub_offset))) if sub_offset is not None else 0.0
@@ -976,6 +1053,16 @@ def build_ass(
         e = max(s + 0.2, min(clip_duration, float(tp["end"]) + sub_off))
         zl = 5 + int(tp.get("layer") or 0)   # テロップの z 順（レイヤー・大きいほど前面）
         tp_pos = tp.get("pos")               # テロップ個別位置（無ければ既定）
+        # ── テロップ個別スタイル（フォント/文字色/縁色/サイズ/エフェクト）。無指定はクリップ既定。
+        t_font = str(tp.get("font") or "").strip() or None
+        t_color = str(tp.get("color") or "").strip() or None
+        t_outc = str(tp.get("outline_color") or "").strip() or None
+        t_size = int(_clamp(tp.get("size"), 24, 200, 0))          # 0=個別指定なし
+        t_width = _clamp(tp.get("width"), 0.35, 0.95, 0)          # 折返し幅（0=個別指定なし）
+        t_eff = None
+        if tp.get("effect") not in (None, ""):
+            t_eff = str(tp["effect"]).strip().lower()
+        use_spd = _clamp(tp.get("anim_speed"), 0.25, 3.0, 0) or spd   # 個別アニメ速度＞クリップ
         if tstyle == "comment":   # コメント読み上げ＝チャット風ボックス＋アバター
             cy = int(float(tp_pos["y"]) * OUTPUT_H) if isinstance(tp_pos, dict) else int(OUTPUT_H * 0.55)
             cx = int(float(tp_pos["x"]) * OUTPUT_W) if isinstance(tp_pos, dict) else margin_l + 90
@@ -985,23 +1072,41 @@ def build_ass(
         elif tstyle == "laugh":   # 笑い「ｗｗｗ」
             lines = _wrap_static(text, _max_chars(laugh_size), 1)
             if lines:
-                ov = _pos_tag(tp_pos or _LAUGH_POS) + (_ANIM_LAUGH if animate else "") + blur_ov
+                ov = _pos_tag(tp_pos or _LAUGH_POS) \
+                    + _scale_anim_ms(_ANIM_LAUGH if animate else "", use_spd) + blur_ov
                 events.append(_dialogue(s, e, "Laugh", lines, ov, layer=zl))
         elif is_alert:   # アラートは glow/装飾を付けず単層（バナー様式）
             lines = _wrap_static(text, _max_chars(alert_size), cap.max_lines)
             if lines:
-                ov = _pos_tag(tp_pos or _ALERT_POS) + (_ANIM_ALERT if animate else "") + blur_ov
+                ov = _pos_tag(tp_pos or _ALERT_POS) \
+                    + _scale_anim_ms(_ANIM_ALERT if animate else "", use_spd) + blur_ov
                 events.append(_dialogue(s, e, "Alert", lines, ov, layer=zl))
         elif is_emph:
-            # 強調の既定は画面中央（プレビューと同じ (0.5, 0.5)）
-            ov = _pos_tag(tp_pos or {"x": 0.5, "y": 0.5}) + _ANIM_EMPH \
-                + _exit_group(tp.get("exit") or exit_animation, int((e - s) * 1000))
-            emit(s, e, "Emphasis", _wrap_static(text, _max_chars(emph_size), cap.max_lines),
-                 ov, emph_c, emph_size, zlayer=zl)
-        else:   # テロップ個別の position/animation があればクリップ既定を上書き
-            lines = _wrap_static(text, cap_chars, cap.max_lines)
+            # 強調の既定は画面中央（プレビューと同じ (0.5, 0.5)）。個別サイズは 1.5 倍で反映。
+            t_emph_size = int(t_size * 1.5) if t_size else 0
+            ov = _pos_tag(tp_pos or {"x": 0.5, "y": 0.5}) \
+                + _scale_anim_ms(
+                    _ANIM_EMPH
+                    + _exit_group(tp.get("exit") or exit_animation, int((e - s) * 1000)), use_spd) \
+                + _style_override_tags(t_font, t_color, t_outc, t_emph_size or None)
+            emit(s, e, "Emphasis",
+                 _wrap_static(text, _max_chars(t_emph_size or emph_size), cap.max_lines),
+                 ov, t_color or emph_c, t_emph_size or emph_size, zlayer=zl, eff=t_eff)
+            if (t_eff or "") == "sparkle":   # 個別キラキラ＝そのテロップの周囲に粒子
+                _p = tp_pos or {"x": 0.5, "y": 0.5}
+                events.extend(_sparkle_events(s, e, center=(float(_p["x"]), float(_p["y"]))))
+        else:   # テロップ個別の position/animation/スタイルがあればクリップ既定を上書き
+            use_size = t_size or cap_size
+            use_ratio = t_width or cap_ratio
+            # 個別サイズ/幅の指定時は折返し文字数もその値で再計算（プレビューと改行位置を一致させる）
+            t_cap_chars = (max(4, int(OUTPUT_W * use_ratio / max(1, use_size)))
+                           if (t_size or t_width) else cap_chars)
+            lines = _wrap_static(text, t_cap_chars, cap.max_lines)
             dur_ms = int((e - s) * 1000)
             anim_sel = (tp.get("animation") or animation or "").lower()
+            # 実効エフェクト（個別＞クリップ）。虹色は文字単位のウェーブで描くため先に解決する。
+            eff_sel = t_eff if t_eff is not None else (effect or "none").lower()
+            eff_pass = t_eff
             style_name, raw = "Caption", None
             grp = _anim_group(tp.get("animation") or animation, "caption", animate)
             exit_sel = tp.get("exit") or exit_animation
@@ -1013,15 +1118,23 @@ def build_ass(
                 grp = r"{\fad(90,260)}" if (exit_sel and exit_sel != "none") else r"{\fad(90,60)}"
                 exit_ov = ""
             elif anim_sel in _CHAR_ANIMS:
-                raw = _char_anim_text(lines, anim_sel, dur_ms)
+                raw = _char_anim_text(lines, anim_sel, dur_ms, speed=use_spd)
                 grp = r"{\fad(0,260)}" if (exit_sel and exit_sel != "none") else r"{\fad(0,80)}"
                 exit_ov = ""
+            elif eff_sel == "rainbow":
+                # 虹色ウェーブ: 文字ごとに位相をずらしたサイクル（行単位の虹タグは付けない）
+                raw = _rainbow_wave_text(lines, dur_ms)
+                eff_pass = "none"
             emit(s, e, style_name, lines,
-                 _pos_tag(tp_pos or eff_caption_pos) + grp + exit_ov,
-                 sub_c, cap_size, zlayer=zl, raw=raw)
+                 _pos_tag(tp_pos or eff_caption_pos) + _scale_anim_ms(grp + exit_ov, use_spd)
+                 + _style_override_tags(t_font, t_color, t_outc, t_size or None),
+                 t_color or sub_c, use_size, zlayer=zl, raw=raw, eff=eff_pass)
+            if eff_sel == "sparkle" and t_eff == "sparkle":   # 個別キラキラ＝テロップ周囲に粒子
+                _p = tp_pos or eff_caption_pos
+                events.extend(_sparkle_events(s, e, center=(float(_p["x"]), float(_p["y"]))))
 
     if (effect or "").lower() == "sparkle":
-        events.extend(_sparkle_events(clip_duration))
+        events.extend(_sparkle_events(0.0, clip_duration))
 
     return "\n".join(
         [

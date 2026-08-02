@@ -14,3 +14,7 @@ python-multipart>=0.0.9       # ファイルアップロード
 pydantic>=2.6.0
 
 # 注: ffmpeg / ffprobe は別途インストールし PATH に通すこと（pip では入らない）
+
+# AI自動透過（画像オーバーレイの背景除去）。無くても他機能は動作（エンドポイントが案内を返す）
+rembg
+onnxruntime

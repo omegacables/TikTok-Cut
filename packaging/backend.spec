@@ -15,6 +15,10 @@ for pkg in [
     "faster_whisper", "ctranslate2", "onnxruntime", "av",
     "tokenizers", "huggingface_hub", "uvicorn", "fastapi", "starlette", "tinysegmenter",
     "google.genai",  # 任意（未導入ならスキップ）
+    # AI自動透過（rembg=U²-Net）。rembg.sessions はファイル走査で動的importするため丸ごと収集。
+    # pymatting は numba/llvmlite 依存（rembg が top-level import する）。モデル(~176MB)は
+    # 同梱せず初回利用時に ~/.u2net へ自動DL（server 側にその旨の案内あり）。
+    "rembg", "pymatting", "pooch", "jsonschema", "skimage", "numba", "llvmlite",
 ]:
     try:
         d, b, h = collect_all(pkg)

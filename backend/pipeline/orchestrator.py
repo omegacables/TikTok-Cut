@@ -93,6 +93,7 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
         title_outline_color=st.get("title_outline_color"),
         animate=bool(st.get("animate", True)),
         animation=st.get("animation"),
+        animation_speed=st.get("animation_speed"),
         exit_animation=st.get("exit_animation"),
         karaoke=bool(st.get("karaoke")),
         highlight_color=st.get("highlight_color"),   # カラオケの発話済み色
@@ -170,18 +171,85 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
                 out_mp4, reframe_mode=m.get("reframe"), letterbox_color=lb_color,
             )
             m["_render_mode"] = "compat"
+    # 画像オーバーレイ（編集UIで配置・任意）。ユーザーが明示配置したものなので
+    # 失敗は握り潰さず伝播させる（sfx と同方針＝サイレント失敗を防ぐ）。
+    img_items = m.get("images") or []
+    if img_items:
+        render.overlay_images(out_mp4, img_items, clip_duration=float(m["clip_duration"]))
     # 効果音（タイムラインで配置・任意）を amix で焼き込む（base 音量は維持）。
     # ロゴ/キャラと違い、ユーザーが明示配置した「音」なので失敗は握り潰さず伝播させる
     # （update_clip が 500 を返し、UI 表示と書き出しの不一致＝サイレント失敗を防ぐ）。
     sfx_items = m.get("sfx") or []
     if sfx_items:
         sfx.apply_sfx(out_mp4, sfx_items, clip_duration=float(m["clip_duration"]))
+
+    # プレビュー用「字幕なし」クリーン動画（互換モード時は入力自体が怪しいのでスキップ）
+    if m.get("_render_mode", "full") != "compat":
+        ensure_clean_preview(input_video, job_dir, m)
+
     thumb = job_dir / f"clip_{i:02d}.jpg"
     try:
         render.make_thumbnail(out_mp4, thumb, at=max(1.0, float(m["clip_duration"]) * 0.45))
     except render.RenderError:
         thumb = Path("")
+    # 描画中に更新したメタ（_clean_sig/_render_mode）を manifest に永続化
+    # （run_job は描画前に書き、update_clip も描画前に書くため、ここで最終状態を保存する）。
+    try:
+        (job_dir / f"clip_{i:02d}.json").write_text(
+            json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
     return out_mp4, thumb
+
+
+def ensure_clean_preview(input_video, job_dir: Path, m: dict) -> Path | None:
+    """プレビュー用「字幕なし」クリーン動画（clip_NN_clean.mp4）を必要時だけ作って返す。
+
+    編集UIはこれを土台に、編集中のテロップ/タイトル/画像をチップで重ねる（完全WYSIWYG）。
+    焼込み済み字幕の上にチップが重なる二重表示（色を変えるとカラオケ風に見えるゴースト）を
+    根絶する。土台はテロップ/スタイル編集では変わらないため、正規化署名（区間・カット・
+    リフレーム・帯色・冒頭演出・効果音・ロゴ有無）が一致する限り既存ファイルを再利用する。
+    成功時は m['_clean_sig'] を更新（呼び元が manifest を保存）。失敗時 None＝従来表示に戻る。
+    """
+    import hashlib
+    i = int(m["id"])
+    clean_mp4 = job_dir / f"clip_{i:02d}_clean.mp4"
+    logo = m.get("logo") or {}
+    logo_arg = logo if logo.get("path") else None
+    keeps = m.get("keeps")
+    lb_color = m.get("letterbox_color") or "black"
+    intro = m.get("intro") or "none"
+    sfx_items = m.get("sfx") or []
+    # 既定値を正規化してから署名（未設定→既定の変化で無駄に再作成しないため）
+    sig_src = json.dumps([m.get("start"), m.get("end"), keeps or None,
+                          m.get("reframe") or "crop",
+                          str(m.get("letterbox_color") or "#000000").lower(),
+                          m.get("intro") or "none", sfx_items,
+                          m.get("clip_duration"), bool(logo_arg)],
+                         sort_keys=True, ensure_ascii=False)
+    sig = hashlib.md5(sig_src.encode("utf-8")).hexdigest()
+    if clean_mp4.exists() and m.get("_clean_sig") == sig:
+        return clean_mp4
+    try:
+        empty_ass = captions.build_ass(telops=[], clip_duration=float(m["clip_duration"]))
+        if keeps:
+            render.render_clip_segments(
+                input_video, float(m["start"]), [tuple(k) for k in keeps], empty_ass,
+                clean_mp4, reframe_mode=m.get("reframe"), intro=intro,
+                letterbox_color=lb_color, logo=logo_arg)
+        else:
+            render.render_clip(
+                input_video, float(m["start"]), float(m["end"]), empty_ass,
+                clean_mp4, reframe_mode=m.get("reframe"), intro=intro,
+                letterbox_color=lb_color, logo=logo_arg)
+        if sfx_items:
+            sfx.apply_sfx(clean_mp4, sfx_items, clip_duration=float(m["clip_duration"]))
+        m["_clean_sig"] = sig
+        return clean_mp4
+    except Exception as e:  # noqa: BLE001  クリーン版は無くても編集可（従来表示に戻るだけ）
+        m["_clean_sig"] = None
+        render.jlog(f"[render] クリーンプレビュー作成失敗（編集は焼込み動画で継続）: {e}")
+        return None
 
 
 def _preflight(job_dir: Path, input_video: Path) -> None:

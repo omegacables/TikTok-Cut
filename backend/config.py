@@ -6,6 +6,7 @@ TikTok 向けのレイアウト定数（解像度・セーフゾーン・字幕�
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -99,6 +100,20 @@ def _sfx_dir() -> Path:
 # 同梱効果音（mp3）の置き場。タイムラインエディタで配置し render で amix する。
 SFX_DIR = _sfx_dir()
 
+
+def _user_sfx_dir() -> Path:
+    """ユーザー追加の効果音置き場（アップロードで増やせる）。同梱 SFX_DIR とは分離。"""
+    env = os.environ.get("TIKTOKCUT_USER_SFX", "").strip()
+    if env:
+        return Path(env)
+    if FROZEN:
+        base = os.environ.get("LOCALAPPDATA") or str(Path.home())
+        return Path(base) / "TikTok-Cut" / "sfx"
+    return PROJECT_DIR / "user_sfx"
+
+
+USER_SFX_DIR = _user_sfx_dir()
+
 # 選択可能な効果音。file は SFX_DIR 内の実体（ASCII名・ffmpeg/URL安全）。dur は秒。
 SFX = [
     {"id": "chime",    "label": "チーン（正解・締め）",   "file": "chime.mp3",    "dur": 3.53, "emoji": "🔔"},
@@ -111,8 +126,20 @@ _SFX_BY_ID = {s["id"]: s for s in SFX}
 
 
 def sfx_path(sfx_id: str) -> Path | None:
-    """効果音 id → 実体パス。未知 id は None。"""
-    s = _SFX_BY_ID.get(str(sfx_id))
+    """効果音 id → 実体パス。u_ 始まりはユーザー追加（USER_SFX_DIR）。未知 id は None。"""
+    sid = str(sfx_id)
+    if sid.startswith("u_"):
+        # ユーザー効果音: id はファイル stem と一致（u_<hex8>）。形式外はパス操作防止で拒否。
+        if not re.fullmatch(r"u_[0-9a-f]{8}", sid):
+            return None
+        try:
+            for p in USER_SFX_DIR.glob(sid + ".*"):
+                if p.is_file():
+                    return p
+        except OSError:
+            pass
+        return None
+    s = _SFX_BY_ID.get(sid)
     if not s:
         return None
     p = SFX_DIR / s["file"]

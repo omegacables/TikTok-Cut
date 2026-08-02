@@ -762,6 +762,128 @@ def overlay_logo(
     return video_path
 
 
+def overlay_images(
+    video_path: str | Path,
+    items: list[dict] | None,
+    *,
+    clip_duration: float = 0.0,
+    ffmpeg: str = FFMPEG,
+) -> Path:
+    """生成済みクリップへ画像を重ねて焼き込む（表示区間 enable 付き・2パス後処理）。
+
+    items: [{file, x, y, scale, start, end, opacity, anim_in, anim_out, in_dur, out_dur}]。
+    file は video と同じフォルダ内のファイル名、x/y は画像中心の正規化位置(0-1)、
+    scale は横幅の画面比(0.05-1)、opacity は 0.05-1。
+    anim_in/out: none/fade/zoom/left/right/top/bottom（イン=入場・アウト=退場）。
+    旧形式 fade_in/fade_out（秒）は anim=fade として読み替える（後方互換）。
+    フェード/ズーム/スライドのため画像は `-loop 1` で連続ストリーム化し、
+    alpha フェード・scale の時間式・overlay 座標の時間式で動かす。
+    sfx.apply_sfx / overlay_logo と同様、生成済み mp4 への後処理（音声は copy）。
+    """
+    video_path = Path(video_path).resolve()
+    anims = ("none", "fade", "zoom", "left", "right", "top", "bottom")
+    norm: list[dict] = []
+    for it in items or []:
+        if not isinstance(it, dict):
+            continue
+        p = video_path.parent / Path(str(it.get("file", ""))).name
+        if not p.exists():
+            continue
+        try:
+            x = max(0.0, min(1.0, float(it.get("x", 0.5))))
+            y = max(0.0, min(1.0, float(it.get("y", 0.5))))
+            sc = max(0.05, min(1.0, float(it.get("scale", 0.35))))
+            s = max(0.0, float(it.get("start", 0.0)))
+            e = float(it.get("end", 0) or clip_duration or 0.0)
+            op = max(0.05, min(1.0, float(it.get("opacity", 1.0) or 1.0)))
+            ai = str(it.get("anim_in", "") or "").lower()
+            ao = str(it.get("anim_out", "") or "").lower()
+            if ai not in anims:
+                ai = "fade" if float(it.get("fade_in", 0) or 0) > 0 else "none"
+            if ao not in anims:
+                ao = "fade" if float(it.get("fade_out", 0) or 0) > 0 else "none"
+            di = max(0.1, min(2.0, float(it.get("in_dur", 0) or it.get("fade_in", 0) or 0.4)))
+            do_ = max(0.1, min(2.0, float(it.get("out_dur", 0) or it.get("fade_out", 0) or 0.4)))
+        except (TypeError, ValueError):
+            continue
+        if clip_duration:
+            e = min(e, float(clip_duration))
+        if e <= s + 0.05:
+            continue
+        dur = e - s
+        di = 0.0 if ai == "none" else min(di, dur / 2)
+        do_ = 0.0 if ao == "none" else min(do_, dur / 2)
+        norm.append({"path": p, "x": x, "y": y, "scale": sc, "start": s, "end": e,
+                     "opacity": op, "ai": ai, "ao": ao, "di": di, "do": do_})
+    if not norm:
+        return video_path
+
+    tmp = video_path.with_name(video_path.stem + "__img.mp4")
+    # cwd=出力フォルダで basename 参照（ジョブフォルダ名は ANSI 安全に正規化済み）
+    inputs: list[str] = ["-i", video_path.name]
+    parts: list[str] = []
+    cur = "[0:v]"
+    for j, it in enumerate(norm):
+        # -loop 1 で静止画を連続ストリーム化（タイムラインが base と揃い fade/式の t が全体時刻で効く）
+        inputs += ["-loop", "1", "-t", f"{it['end'] + 0.2:.3f}", "-i", it["path"].name]
+        s, e, di, do_ = it["start"], it["end"], it["di"], it["do"]
+        ai, ao = it["ai"], it["ao"]
+        bw = max(24, int(OUTPUT_W * it["scale"]))
+        # ズーム: scale の時間式で拡縮（eval=frame・overlay の中央アンカー式が w/h 追従で自動再センタ）
+        if "zoom" in (ai, ao):
+            fin = f"*clip((t-{s:.3f})/{di:.3f},0.02,1)" if ai == "zoom" else ""
+            fout = f"*clip(({e:.3f}-t)/{do_:.3f},0.02,1)" if ao == "zoom" else ""
+            chain = f"[{j + 1}:v]scale=w='max(2,{bw}{fin}{fout})':h=-1:eval=frame,format=rgba"
+        else:
+            chain = f"[{j + 1}:v]scale={bw}:-1,format=rgba"
+        if ai == "fade":
+            chain += f",fade=t=in:st={s:.3f}:d={di:.3f}:alpha=1"
+        if ao == "fade":
+            chain += f",fade=t=out:st={e - do_:.3f}:d={do_:.3f}:alpha=1"
+        if it["opacity"] < 0.999:
+            chain += f",colorchannelmixer=aa={it['opacity']:.3f}"
+        parts.append(chain + f"[g{j}]")
+        # スライド: overlay 座標の時間式（画面外→定位置／定位置→画面外）。イン/アウトを加算合成。
+        bx = f"(W*{it['x']:.4f}-w/2)"
+        by = f"(H*{it['y']:.4f}-h/2)"
+        pin = f"(1-clip((t-{s:.3f})/{di:.3f},0,1))" if di > 0 else None
+        pout = f"(1-clip(({e:.3f}-t)/{do_:.3f},0,1))" if do_ > 0 else None
+        xoff = yoff = ""
+        for anim, prog in ((ai, pin), (ao, pout)):
+            if not prog:
+                continue
+            if anim == "left":
+                xoff += f"-({bx}+w)*{prog}"
+            elif anim == "right":
+                xoff += f"+(W-{bx})*{prog}"
+            elif anim == "top":
+                yoff += f"-({by}+h)*{prog}"
+            elif anim == "bottom":
+                yoff += f"+(H-{by})*{prog}"
+        nxt = "[vout]" if j == len(norm) - 1 else f"[o{j}]"
+        parts.append(
+            f"{cur}[g{j}]overlay=x='{bx}{xoff}':y='{by}{yoff}'"
+            f":enable='between(t,{s:.3f},{e:.3f})'{nxt}")
+        cur = f"[o{j}]"
+    fc = ";".join(parts)
+
+    def build(use_nvenc: bool) -> list[str]:
+        return [
+            ffmpeg, "-y", *inputs,
+            "-filter_complex", fc,
+            "-map", "[vout]", "-map", "0:a?",
+            *_video_codec_args(use_nvenc=use_nvenc, ffmpeg=ffmpeg),
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            tmp.name,
+        ]
+
+    _run_with_nvenc_fallback(build, cwd=video_path.parent, ffmpeg=ffmpeg,
+                             label=f"overlay_images {video_path.name}")
+    replace_retry(tmp, video_path)
+    return video_path
+
+
 def make_thumbnail(
     video_path: str | Path,
     out_path: str | Path,

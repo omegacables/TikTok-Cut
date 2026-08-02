@@ -144,6 +144,18 @@
   <!-- 字幕・効果音タイムラインのドラッグ用ツールチップ -->
   <div id="subTooltip" class="sub-tooltip" hidden></div>
 
+  <!-- 画像のポップアップ編集（タイムライン/プレビューの画像をダブルクリックで開く。
+       中身は編集パネル(.ed-sel-img)をそのまま移設して表示する） -->
+  <div id="imgEditModal" class="modal" hidden>
+    <div class="modal-box" style="max-width:600px;">
+      <h3>🖼 画像の編集</h3>
+      <div id="imgEditBody"></div>
+      <div style="margin-top:14px;text-align:right;">
+        <button class="dl-btn" onclick="closeImgModal()">閉じる</button>
+      </div>
+    </div>
+  </div>
+
   <nav class="tabs">
     <button class="tab active" data-tab="create" onclick="switchTab('create')"><span class="tab-ic">✨</span>作成</button>
     <button class="tab" data-tab="result" id="resultTabBtn" onclick="switchTab('result')" disabled>
@@ -413,6 +425,11 @@
     <div class="detail-head">
       <button class="dl-btn" onclick="switchTab('result')">← 結果に戻る</button>
       <h3 id="detailTitle" class="detail-title"></h3>
+    </div>
+    <!-- 画面端の「戻る/進む」ドック（Ctrl+Z / Ctrl+Y と同じ・常に見える） -->
+    <div id="detailUndoDock" class="undo-dock">
+      <button id="dockUndo" class="dock-btn" onclick="dockUndo()" title="元に戻す (Ctrl+Z)" disabled>↶<span>戻る</span></button>
+      <button id="dockRedo" class="dock-btn" onclick="dockRedo()" title="やり直す (Ctrl+Y)" disabled>↷<span>進む</span></button>
     </div>
     <div class="detail-body">
       <div class="detail-video-col">

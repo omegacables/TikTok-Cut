@@ -81,7 +81,7 @@
     toks.forEach(function (tk) {
       // Python の `tk in "文字列"` は部分文字列判定 → indexOf で同義に
       if ('。．'.indexOf(tk) >= 0) return;
-      if (PAUSE.indexOf(tk) >= 0) { if (line) push(); return; }
+      // 読点「、」は改行トリガーにしない（行内に残し、行末の読点は push() が落とす）＝captions.py と同期
       var keep = '！？!?'.indexOf(tk) >= 0;   // Python の `tk in "！？!?"`（部分文字列判定）と同義
       var att = attached(tk);
       var cand = line ? (line + joiner + tk) : tk;

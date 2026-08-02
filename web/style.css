@@ -244,9 +244,21 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 @keyframes pvShake { 0%,100% { transform: translate(0,0) rotate(-1.2deg); } 25% { transform: translate(1.5px,-1px) rotate(1.2deg); } 50% { transform: translate(-1.5px,1px) rotate(-1deg); } 75% { transform: translate(1px,1.5px) rotate(1deg); } }
 
 /* 文字エフェクト（CSS 近似） */
-.pv-eff-glow { text-shadow: 0 0 8px rgba(255,255,255,.95), 0 0 18px var(--accent-2), 0 0 26px var(--accent-2); }
+/* 光彩: 文字色そのものが強く発光して見えるよう currentColor で多重ハロー＋脈動 */
+@keyframes pvGlowPulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
+.pv-eff-glow { text-shadow: 0 0 4px #fff, 0 0 10px currentColor, 0 0 22px currentColor,
+  0 0 36px currentColor !important; animation: pvGlowPulse 1.6s ease-in-out infinite; }
 .pv-eff-horror { color: #e23b3b !important; text-shadow: 0 0 7px #500, 0 0 2px #200; }
-.pv-eff-sparkle { text-shadow: 0 0 6px rgba(255,230,0,.6); }
+/* キラキラ: 金色のきらめき＋文字の周りで瞬く★（実描画では★粒子を焼き込む） */
+.pv-eff-sparkle { text-shadow: 0 0 6px rgba(255,230,0,.9), 0 0 14px rgba(255,230,0,.55) !important; }
+/* チップは既に position:absolute（配置を壊さないよう、未配置の要素だけ relative 化） */
+.pv-eff-sparkle:not(.ed-chip) { position: relative; }
+.pv-eff-sparkle::before, .pv-eff-sparkle::after { position: absolute; color: #FFE600; font-size: .8em;
+  text-shadow: 0 0 4px #fff; pointer-events: none; animation: pvSparkTw 1.1s ease-in-out infinite; }
+.pv-eff-sparkle::before { content: '✦'; left: -0.7em; top: -0.6em; }
+.pv-eff-sparkle::after { content: '✦'; right: -0.7em; bottom: -0.5em; animation-delay: .55s; }
+@keyframes pvSparkTw { 0%,100% { opacity: 0; transform: scale(.3) rotate(0deg); }
+  50% { opacity: 1; transform: scale(1.15) rotate(40deg); } }
 
 /* キラキラ粒子レイヤー */
 #pvSparkle { position: absolute; inset: 0; pointer-events: none; z-index: 2; }
@@ -312,6 +324,62 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .ed-chip.ed-ct::before, .ed-chip.ed-has-w::before { content: ''; position: absolute; left: -5px; top: 50%;
   transform: translateY(-50%); width: 8px; height: 22px; border-radius: 4px;
   background: rgba(255,255,255,.75); border: 1px solid rgba(0,0,0,.35); cursor: ew-resize; }
+/* テロップチップの下辺中央＝文字サイズハンドル（見た目のみ・判定はチップ側のゾーン） */
+.ed-tel-chip .ed-h-b { position: absolute; left: 50%; bottom: -5px; transform: translateX(-50%);
+  width: 22px; height: 8px; border-radius: 4px; background: rgba(255,255,255,.75);
+  border: 1px solid rgba(0,0,0,.35); cursor: ns-resize; pointer-events: none; }
+/* タイムラインの高さ変更バー（下端をドラッグで引き伸ばす） */
+.ed-tl-resize { display: flex; align-items: center; justify-content: center; height: 14px;
+  margin-top: 4px; cursor: ns-resize; border-radius: 7px; background: var(--surface-2);
+  border: 1px solid var(--border); touch-action: none; user-select: none; }
+.ed-tl-resize:hover { border-color: var(--accent-2); }
+.ed-tl-resize-grip { width: 46px; height: 5px; pointer-events: none;
+  background-image: radial-gradient(circle, rgba(255,255,255,.65) 1.1px, transparent 1.4px);
+  background-size: 7px 5px; background-position: 1px 1px; background-repeat: repeat; }
+
+/* 画像のポップアップ編集（パネルを移設して表示） */
+#imgEditBody .ed-sel-img { margin: 0; }
+
+/* クリーンプレビュー準備中の案内 */
+.ed-clean-note { margin: 6px 0; padding: 8px 10px; background: var(--surface-2);
+  border: 1px dashed var(--border); border-radius: 8px; text-align: left; }
+
+/* 6点ドット＝「掴んで動かせる」目印（タイムラインの字幕/効果音/画像ブロックの左端）。
+   枠や背景は付けず、2列×3の丸ドットだけを置く（Notion等のドラッグハンドルと同じ流儀）。
+   普段は半透明・ブロックにホバーで明るく＝主張しすぎない。 */
+.ed-block .ed-blk-dots { position: absolute; left: 4px; top: 50%; transform: translateY(-50%);
+  width: 12px; height: 21px; cursor: grab; z-index: 2; opacity: .5; transition: opacity .15s; }
+.ed-block .ed-blk-dots::before { content: ''; position: absolute; left: 1px; top: 2px;
+  width: 3px; height: 3px; border-radius: 50%; background: #fff;
+  box-shadow: 0 7px 0 #fff, 0 14px 0 #fff, 6px 0 0 #fff, 6px 7px 0 #fff, 6px 14px 0 #fff;
+  filter: drop-shadow(0 1px 1px rgba(0,0,0,.55)); }
+.ed-block:hover .ed-blk-dots { opacity: .95; }
+.ed-block .ed-blk-dots:active { cursor: grabbing; }
+/* 小さいブロック（効果音など）は 2列×2 のコンパクト版 */
+.ed-block-sfx .ed-blk-dots { height: 12px; }
+.ed-block-sfx .ed-blk-dots::before { top: 1px;
+  box-shadow: 0 6px 0 #fff, 6px 0 0 #fff, 6px 6px 0 #fff; }
+/* 字幕ブロックはドットぶん本文を右へ逃がす（テキスト欄と重ねない） */
+.ed-block-tel .ed-block-body { padding-left: 16px; }
+
+/* 画面端の「戻る/進む」ドック（詳細編集タブ内・固定表示） */
+.undo-dock { position: fixed; right: 12px; top: 50%; transform: translateY(-50%);
+  display: flex; flex-direction: column; gap: 10px; z-index: 900; }
+.dock-btn { display: flex; flex-direction: column; align-items: center; gap: 2px;
+  width: 56px; padding: 10px 6px; background: var(--surface-2); border: 1px solid var(--border);
+  border-radius: 12px; color: var(--text); font-size: 1.2rem; cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0,0,0,.45); }
+.dock-btn span { font-size: .62rem; color: var(--muted); }
+.dock-btn:disabled { opacity: .35; cursor: default; }
+.dock-btn:not(:disabled):hover { border-color: var(--accent-2); transform: none; }
+
+/* 画像パネルの追加コントロール */
+.ed-img-op { flex: 1; min-width: 90px; }
+.ed-img-fi, .ed-img-fo { flex: 0 0 auto; padding: 6px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .78rem; }
+.ed-t-aspd { width: 62px; flex: 0 0 auto; padding: 5px 4px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .76rem; }
+.ed-msel-note { color: var(--accent); font-size: .72rem; margin-left: 6px; }
 .ed-actions { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
 .ed-save { padding: 9px 14px; background: var(--accent); color: #fff; border: none; border-radius: 8px; cursor: pointer; font-size: .85rem; }
 .ed-save:hover { filter: brightness(1.08); }
@@ -324,18 +392,48 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .sfx-chip:hover { border-color: var(--accent-2); }
 .sfx-dur { color: var(--muted); font-size: .66rem; }
 
+/* ユーザー追加効果音の削除✕（チップ内） */
+.sfx-chip .sfx-del { margin-left: 2px; color: var(--muted); font-size: .68rem; padding: 0 2px; }
+.sfx-chip .sfx-del:hover { color: var(--accent); }
+
+/* ===== クリップ全体スタイル（折りたたみ・既定は閉） ===== */
+.ed-clipstyle-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 10px 0 6px; }
+.ed-clipstyle-btn.on { border-color: var(--accent-2); color: var(--accent-2); }
+.ed-clipstyle { margin: 0 0 10px; padding: 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+/* 開いた時はコンパクトな2列グリッドで（縦に長くしない） */
+.ed-clipstyle .ed-pos { margin-bottom: 0; }
+.ed-clipstyle .ed-pos-side { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 8px 16px; }
+
+/* ===== 画像オーバーレイ（動画に貼る画像） ===== */
+.ed-img-bar { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; align-items: center; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+.ed-img-count { font-size: .72rem; color: var(--muted); }
+.ed-img-sc { flex: 1; min-width: 110px; }
+.ed-img-s, .ed-img-e { width: 50px; flex: 0 0 auto; padding: 5px 4px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .76rem; }
+.ed-img-chip { position: absolute; translate: -50% -50%; cursor: grab; z-index: 8;
+  outline: 1px dashed rgba(255,255,255,.4); touch-action: none; user-select: none; }
+.ed-img-chip:active { cursor: grabbing; }
+.ed-img-chip.sel { outline: 2px solid var(--accent-2); }
+.ed-img-chip img { display: block; width: 100%; height: auto; pointer-events: none; -webkit-user-drag: none; }
+.ed-img-chip::after { content: ''; position: absolute; right: -5px; bottom: -5px; width: 10px; height: 10px;
+  background: var(--accent-2); border: 1px solid rgba(0,0,0,.4); border-radius: 2px; cursor: nwse-resize; }
+
 /* ドラッグ操作のツールチップ（edTip） */
 .sub-tooltip { position: fixed; z-index: 1100; background: rgba(0,0,0,.85); color: #fff; font-size: .7rem;
   padding: 3px 7px; border-radius: 5px; pointer-events: none; white-space: nowrap; }
 
 /* ===== インライン縦タイムライン（字幕＋効果音・動画エディタ風） ===== */
 .ed-tl-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; margin: 12px 0 6px; }
-.ed-sfx-pal { display: flex; flex-wrap: wrap; gap: 6px; margin: 6px 0; align-items: center; }
-.ed-pal-lbl { font-size: .72rem; color: var(--muted); }
-.ed-tl-colhead { display: grid; grid-template-columns: 46px 1fr 1fr; font-size: .72rem; color: var(--muted); padding: 2px 0; }
+.ed-sfx-pal { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0; align-items: center; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+.ed-pal-lbl { font-size: .74rem; color: var(--text); font-weight: 700; }
+.ed-tl-colhead { display: grid; grid-template-columns: 46px 1.2fr 0.8fr 0.8fr; font-size: .72rem; color: var(--muted); padding: 2px 0; }
 .ed-tl-colhead span { text-align: center; }
 .ed-tl-wrap { max-height: 420px; overflow-y: auto; overflow-x: hidden; background: #14161c; border: 1px solid var(--border); border-radius: 8px; }
-.ed-tl { position: relative; display: grid; grid-template-columns: 46px 1fr 1fr; }
+.ed-tl { position: relative; display: grid; grid-template-columns: 46px 1.2fr 0.8fr 0.8fr; }
+.ed-tl-img { border-left: 1px solid var(--border); }
+/* 画像レーンのブロック（サムネイル表示・上下グリップで表示区間） */
+.ed-block-img { background: rgba(124,77,255,.20); border: 1px solid #7C4DFF; align-items: center; }
+.ed-block-img.sel { background: rgba(124,77,255,.36); box-shadow: 0 0 0 1px #7C4DFF; z-index: 5; }
+.ed-block-img .ed-img-thumb { width: 70%; max-height: 70%; object-fit: contain; margin: auto; pointer-events: none; border-radius: 3px; }
 .ed-tl-gutter { position: relative; border-right: 1px solid var(--border); }
 .ed-tick { position: absolute; left: 0; right: 0; height: 0; border-top: 1px solid rgba(255,255,255,.07); }
 .ed-tick-label { position: absolute; right: 4px; top: -7px; font-size: .62rem; color: var(--muted); background: #14161c; padding: 0 2px; }
@@ -358,9 +456,22 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .ed-block-del { position: absolute; top: 1px; right: 2px; width: 16px; height: 16px; line-height: 14px; text-align: center; border: none; border-radius: 50%; background: rgba(0,0,0,.45); color: #fff; font-size: .66rem; cursor: pointer; z-index: 3; padding: 0; }
 .ed-block-del:hover { background: var(--accent); }
 .ed-tl-readout { font-size: .72rem; color: var(--muted); margin: 4px 0; }
-.ed-sel-tel, .ed-sel-sfx { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 8px; padding: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; }
-.ed-sel-cap { font-size: .72rem; color: var(--accent-2); font-weight: 600; }
-.ed-sel-tel > label, .ed-sel-sfx > label { display: inline-flex; align-items: center; gap: 4px; font-size: .68rem; color: var(--muted); }
+.ed-sel-tel, .ed-sel-sfx, .ed-sel-img { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 10px; margin: 8px 0; padding: 10px 12px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 10px; }
+/* 未選択時は完全に消す（display:flex が hidden 属性のUA既定を上書きして
+   空の枠だけ表示される不具合の修正） */
+.ed-sel-tel[hidden], .ed-sel-sfx[hidden], .ed-sel-img[hidden] { display: none; }
+/* 選択中パネル＝メインの編集UI。アクセント枠で目立たせる */
+.ed-sel-tel { border-color: rgba(37,244,238,.55); background: rgba(37,244,238,.05); }
+.ed-sel-img { border-color: rgba(255,45,85,.45); }
+.ed-sel-cap { font-size: .78rem; color: var(--accent-2); font-weight: 700; flex-basis: 100%; }
+.ed-sel-tel > label, .ed-sel-sfx > label, .ed-sel-img > label { display: inline-flex; align-items: center; gap: 5px; font-size: .74rem; color: var(--muted); white-space: nowrap; }
+/* ── テロップ個別スタイル（選択パネル2段目: 色・縁・フォント・サイズ・エフェクト）── */
+.ed-t-stybreak { flex-basis: 100%; height: 1px; background: var(--border); margin: 2px 0; }
+.ed-t-stylbl { flex-basis: 100%; font-size: .74rem; color: var(--text); font-weight: 700; }
+.ed-sel-tel input[type=color] { width: 42px; height: 30px; padding: 1px 2px; border: 1px solid var(--border); border-radius: 6px; background: var(--surface); cursor: pointer; flex: 0 0 auto; }
+.ed-t-size, .ed-t-width { width: 70px; flex: 0 0 auto; padding: 6px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .8rem; }
+.ed-t-font { flex: 0 0 auto; max-width: 200px; padding: 6px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .8rem; }
+.ed-t-eff { flex: 0 0 auto; max-width: 160px; padding: 6px 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .8rem; }
 .ed-sel-gain { flex: 1; min-width: 150px; }
 .ed-sel-gain input[type=range] { flex: 1; }
 /* 効果音ブロックの✕（小） */
@@ -393,7 +504,7 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 .detail-pv { position: relative; }
 .ed-frame.detail-pv-frame { position: absolute; inset: 0; width: auto; aspect-ratio: auto;
   background: transparent; border: 0; border-radius: 12px; pointer-events: none; }
-.ed-frame.detail-pv-frame .ed-chip { pointer-events: auto; }
+.ed-frame.detail-pv-frame .ed-chip, .ed-frame.detail-pv-frame .ed-img-chip { pointer-events: auto; }
 .detail-section-title { font-weight: 700; font-size: .95rem; margin: 16px 0 8px; }
 .detail-section-title:first-child { margin-top: 0; }
 .detail-edit-col .clip-editor {
@@ -685,10 +796,14 @@ html { font-size: 108%; }
 @keyframes pvChKara { to { color: var(--pv-kara, #FFE600); } }
 /* ネオン: 発光ピンクの縁 */
 .pv-eff-neon { text-shadow: 0 0 5px #ee3bff, 0 0 12px #ee3bff, 0 0 22px rgba(238,59,255,.7) !important; }
-/* 虹色: 色相を回す */
-@keyframes pvRainbow { 0% { color: #ff3b3b; } 17% { color: #ff9900; } 33% { color: #ffee00; }
-  50% { color: #2ee66b; } 67% { color: #25f4ee; } 83% { color: #4066ff; } 100% { color: #cc39ff; } }
-.pv-eff-rainbow { animation: pvRainbow 3s linear infinite !important; }
+/* 虹色（パチンコの虹演出風）: 高速で色を回し続ける＋白発光（焼込み側 _rainbow_tags と同調） */
+@keyframes pvRainbow { 0% { color: #ff3030; } 14% { color: #ff9900; } 28% { color: #ffee00; }
+  42% { color: #2ee66b; } 56% { color: #25f4ee; } 70% { color: #4066ff; } 84% { color: #ff2dcc; } 100% { color: #ff3030; } }
+.pv-eff-rainbow { animation: pvRainbow 1s linear infinite !important;
+  text-shadow: 0 0 5px rgba(255,255,255,.95), 0 0 12px rgba(255,255,255,.55) !important;
+  -webkit-text-stroke-color: #fff !important; }
+/* 虹色ウェーブ: 文字ごとに位相をずらして虹が流れる（負の animation-delay をインラインで付与） */
+.pv-ch.pv-rb { animation: pvRainbow 1s linear infinite; }
 /* 金文字 */
 .pv-eff-gold { color: #FFC31C !important; -webkit-text-stroke-color: #8F5C0E !important;
   text-shadow: 0 1px 2px rgba(90,60,0,.6), 0 0 10px rgba(255,195,28,.45) !important; }
@@ -699,6 +814,29 @@ html { font-size: 108%; }
 /* 詳細編集: カラオケトグル */
 .ed-kara-item { display: flex; align-items: center; gap: 8px; }
 .ed-kara-item input { width: 18px; height: 18px; accent-color: var(--accent-2); }
+
+/* ===== 見た目つきピッカー（アニメ/エフェクト選択・フォント選択と同じ思想） ===== */
+.fxp-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px;
+  background: var(--surface); border: 1px solid var(--border); border-radius: 6px;
+  color: var(--text); font-size: .8rem; cursor: pointer; max-width: 190px; }
+.fxp-btn:hover { border-color: var(--accent-2); }
+.fxp-cur { font-weight: 700; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fxp-menu { position: fixed; z-index: 1200; display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(104px, 1fr)); gap: 6px; width: 340px;
+  max-height: 320px; overflow-y: auto; padding: 10px; background: #14161c;
+  border: 1px solid var(--border); border-radius: 10px; box-shadow: 0 10px 32px rgba(0,0,0,.55); }
+.fxp-item { display: flex; flex-direction: column; align-items: center; gap: 4px; padding: 8px 4px;
+  background: var(--surface-2); border: 1px solid var(--border); border-radius: 8px; cursor: pointer; }
+.fxp-item:hover { border-color: var(--accent-2); }
+.fxp-item.sel { border-color: var(--accent-2); box-shadow: 0 0 0 1px var(--accent-2); }
+.fxp-sample { display: inline-block; font-weight: 800; font-size: 1.02rem; color: #fff;
+  -webkit-text-stroke: .5px #000; line-height: 1.4; min-height: 1.5em; }
+.fxp-name { font-size: .64rem; color: var(--muted); text-align: center; line-height: 1.2; }
+/* 退場アニメのループプレビュー（出て→消える） */
+@keyframes pvExFade { 0%,35% { opacity: 1; } 85%,100% { opacity: 0; } }
+@keyframes pvExShrink { 0%,35% { transform: scale(1); opacity: 1; } 90%,100% { transform: scale(.25); opacity: 0; } }
+@keyframes pvExBlur { 0%,35% { filter: blur(0); opacity: 1; } 90%,100% { filter: blur(7px); opacity: 0; } }
+@keyframes pvExFlip { 0%,35% { transform: perspective(300px) rotateY(0); opacity: 1; } 90%,100% { transform: perspective(300px) rotateY(85deg); opacity: 0; } }
 
 /* ===== v0.8.0 見た目テンプレチップ ===== */
 .tpl-row { display: flex; flex-wrap: wrap; gap: 8px; }

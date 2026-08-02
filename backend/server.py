@@ -24,7 +24,7 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from .config import (FONTS, FONTS_DIR, OUTPUT_ROOT, PREFS_FILE, PROJECT_DIR, SETTINGS,
-                     SFX, SFX_DIR, valid_font)
+                     SFX, SFX_DIR, USER_SFX_DIR, valid_font)
 from .pipeline.orchestrator import render_from_manifest, run_job
 
 # UI(web) は TIKTOKCUT_WEB があればそこから配信（Electron 側更新だけで UI 差し替え可能）。
@@ -135,6 +135,12 @@ if FONTS_DIR.exists():
 if SFX_DIR.exists():
     # 効果音タイムライン UI の試聴用に同梱効果音を配信
     app.mount("/sfx", StaticFiles(directory=str(SFX_DIR)), name="sfx")
+# ユーザー追加の効果音（アップロードで増やせる）。試聴用に配信。
+try:
+    USER_SFX_DIR.mkdir(parents=True, exist_ok=True)
+    app.mount("/usersfx", StaticFiles(directory=str(USER_SFX_DIR)), name="usersfx")
+except OSError:
+    pass
 
 
 @app.get("/api/fonts")
@@ -142,9 +148,86 @@ def fonts_list():
     return FONTS
 
 
+_USER_SFX_META = USER_SFX_DIR / "sfx.json"
+
+
+def _user_sfx_list() -> list[dict]:
+    """ユーザー追加効果音の一覧（実体ファイルが残っているものだけ）。"""
+    try:
+        items = json.loads(_USER_SFX_META.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return []
+    if not isinstance(items, list):
+        return []
+    return [it for it in items
+            if isinstance(it, dict) and it.get("id") and it.get("file")
+            and (USER_SFX_DIR / str(it["file"])).exists()]
+
+
+def _save_user_sfx_meta(items: list[dict]) -> None:
+    try:
+        _USER_SFX_META.parent.mkdir(parents=True, exist_ok=True)
+        _USER_SFX_META.write_text(json.dumps(items, ensure_ascii=False, indent=2),
+                                  encoding="utf-8")
+    except OSError as e:
+        raise HTTPException(500, f"効果音リストの保存に失敗しました: {e}")
+
+
 @app.get("/api/sfx")
 def sfx_list():
-    return SFX
+    """同梱＋ユーザー追加の効果音一覧。src は試聴/プレビュー用の配信URL。"""
+    out = [{**s, "src": f"/sfx/{s['file']}"} for s in SFX]
+    out += [{**s, "src": f"/usersfx/{s['file']}", "user": True} for s in _user_sfx_list()]
+    return out
+
+
+@app.post("/api/sfx")
+def sfx_upload(label: str = Form(""), audio: UploadFile = File(...)):
+    """効果音ファイル（MP3/WAV等）を追加登録する。id は u_<hex8>（ファイル stem と一致）。"""
+    ext = Path(audio.filename or "").suffix.lower()
+    if ext not in (".mp3", ".wav", ".m4a", ".ogg", ".aac"):
+        raise HTTPException(400, "MP3 / WAV / M4A / OGG / AAC の音声ファイルを選んでください")
+    sid = "u_" + uuid.uuid4().hex[:8]
+    dest = USER_SFX_DIR / (sid + ext)
+    try:
+        USER_SFX_DIR.mkdir(parents=True, exist_ok=True)
+        with open(dest, "wb") as f:
+            shutil.copyfileobj(audio.file, f)
+    except OSError as e:
+        raise HTTPException(500, f"効果音の保存に失敗しました: {e}")
+    from .pipeline.render import probe_duration
+    dur = round(probe_duration(dest), 2)
+    if dur <= 0:
+        try:
+            dest.unlink()
+        except OSError:
+            pass
+        raise HTTPException(400, "音声ファイルとして読み込めませんでした（形式をご確認ください）")
+    lab = (label or "").strip() or Path(audio.filename or "効果音").stem[:20]
+    item = {"id": sid, "label": lab, "file": dest.name, "dur": dur, "emoji": "🎵"}
+    items = _user_sfx_list()
+    items.append(item)
+    _save_user_sfx_meta(items)
+    return {**item, "src": f"/usersfx/{dest.name}", "user": True}
+
+
+@app.delete("/api/sfx/{sid}")
+def sfx_delete(sid: str):
+    """ユーザー追加の効果音を一覧から削除する（同梱5種は削除不可）。"""
+    if not sid.startswith("u_"):
+        raise HTTPException(400, "同梱の効果音は削除できません")
+    items = _user_sfx_list()
+    keep = [it for it in items if it.get("id") != sid]
+    if len(keep) == len(items):
+        raise HTTPException(404, "効果音が見つかりません")
+    for it in items:
+        if it.get("id") == sid:
+            try:
+                (USER_SFX_DIR / str(it["file"])).unlink()
+            except OSError:
+                pass
+    _save_user_sfx_meta(keep)
+    return {"ok": True}
 
 
 @app.get("/api/prefs")
@@ -487,7 +570,10 @@ def get_clip(job: str, cid: int):
         _input_exists = bool(m.get("input_video")) and Path(str(m["input_video"])).exists()
     except OSError:
         _input_exists = False
+    # プレビュー用「字幕なし」クリーン動画（編集UIの土台。無ければ null＝従来の焼込み動画を使う）
+    _clean = _output_path(job, f"clip_{cid:02d}_clean.mp4")
     return {"id": m["id"], "input_exists": _input_exists,
+            "preview": (f"{job}/clip_{cid:02d}_clean.mp4" if _clean.exists() else None),
             "title": m.get("title", ""), "hook": m.get("hook", ""),
             "telops": m.get("telops", []), "style": m.get("style", {}),
             "telops_orig": m.get("telops_orig", []),   # 「初期設定に戻す」用の原字幕
@@ -495,6 +581,7 @@ def get_clip(job: str, cid: int):
             "start": m.get("start"), "end": m.get("end"),               # 元クリップ範囲（カット計算用）
             "sub_offset": m.get("sub_offset", 0.0),
             "intro": m.get("intro", "none"), "sfx": m.get("sfx", []),
+            "images": m.get("images", []),   # 画像オーバーレイ（貼り付け画像）
             "clip_duration": m.get("clip_duration", 0.0),
             "reframe": m.get("reframe", "crop"), "letterbox_color": m.get("letterbox_color", "#000000")}
 
@@ -510,6 +597,85 @@ def clip_sfx_suggest(job: str, cid: int):
     items = highlight.suggest_sfx(m.get("telops") or [], SFX,
                                   float(m.get("clip_duration") or 0))
     return {"suggestions": items}
+
+
+@app.post("/api/clip/{job}/{cid}/image")
+def upload_clip_image(job: str, cid: int, image: UploadFile = File(...)):
+    """画像オーバーレイ用の画像をジョブフォルダへ保存し、ファイル名を返す。
+
+    ファイル名は img_<hex8>.<ext>（ASCII固定＝ffmpeg/URL 安全）。配置情報は
+    update_clip の payload.images で保存する。
+    """
+    jd = _job_dir(job)
+    if not jd.exists():
+        raise HTTPException(404, "ジョブが見つかりません")
+    ext = Path(image.filename or "").suffix.lower()
+    if ext == ".jpeg":
+        ext = ".jpg"
+    if ext not in (".png", ".jpg", ".webp"):
+        raise HTTPException(400, "PNG / JPG / WebP の画像を選んでください")
+    name = f"img_{uuid.uuid4().hex[:8]}{ext}"
+    try:
+        with open(jd / name, "wb") as f:
+            shutil.copyfileobj(image.file, f)
+    except OSError as e:
+        raise HTTPException(500, f"画像の保存に失敗しました: {e}")
+    return {"file": name}
+
+
+@app.post("/api/clip/{job}/{cid}/image_removebg")
+def image_remove_bg(job: str, cid: int, payload: dict = Body(...)):
+    """画像オーバーレイのAI自動透過（背景除去）。rembg(U²-Net) でアルファ付きPNGを生成する。
+
+    元ファイルは残し、新しい img_<hex8>.png を返す（UI側で差し替え＝Undoで戻せる）。
+    初回はモデル（約170MB）のダウンロードが走るため時間がかかることがある。
+    """
+    fname = Path(str(payload.get("file", ""))).name
+    if not re.fullmatch(r"img_[0-9a-f]{8}\.(png|jpg|webp)", fname):
+        raise HTTPException(400, "対象の画像が不正です")
+    src = _job_dir(job) / fname
+    if not src.exists():
+        raise HTTPException(404, "画像が見つかりません")
+    try:
+        from rembg import remove as _rembg_remove
+    except ImportError:
+        raise HTTPException(400, "AI自動透過エンジン（rembg）がこのビルドには含まれていません。"
+                                 "開発版では `pip install rembg onnxruntime` で有効になります")
+    try:
+        out_bytes = _rembg_remove(src.read_bytes())
+    except Exception as e:  # noqa: BLE001  モデルDL失敗・メモリ不足等
+        raise HTTPException(500, f"自動透過に失敗しました: {e}")
+    name = f"img_{uuid.uuid4().hex[:8]}.png"
+    try:
+        (_job_dir(job) / name).write_bytes(out_bytes)
+    except OSError as e:
+        raise HTTPException(500, f"画像の保存に失敗しました: {e}")
+    return {"file": name}
+
+
+@app.post("/api/clip/{job}/{cid}/clean_preview")
+def make_clean_preview(job: str, cid: int):
+    """旧クリップ用: 編集プレビューの土台になる「字幕なし」動画を後追いで生成する。
+
+    クリーンプレビュー導入前に作ったクリップは焼込み動画しか無く、編集中の字幕が
+    焼込み済み字幕と二重に見える。編集画面を開いた時にUIがこれを呼び、完成したら
+    プレビュー動画を差し替える。すでに最新のクリーン動画があれば即返す。
+    """
+    mf = _output_path(job, f"clip_{cid:02d}.json")
+    if not mf.exists():
+        raise HTTPException(404, "クリップ情報が見つかりません")
+    from .pipeline.orchestrator import ensure_clean_preview
+    with _render_lock(job):
+        m = _load_manifest(mf, required=("id", "input_video", "start", "end", "clip_duration"))
+        src = str(m.get("input_video") or "")
+        if not src or not Path(src).exists():
+            raise HTTPException(400, "元動画が見つからないためプレビュー用動画を作成できません")
+        p = ensure_clean_preview(src, _job_dir(job), m)
+        if p:
+            mf.write_text(json.dumps(m, ensure_ascii=False, indent=2), encoding="utf-8")
+    if not p:
+        raise HTTPException(500, "プレビュー用動画の作成に失敗しました")
+    return {"preview": f"{job}/clip_{cid:02d}_clean.mp4"}
 
 
 @app.get("/api/clip/{job}/{cid}/waveform")
@@ -577,6 +743,33 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
                 item["emphasis"] = True
             if tp.get("animation"):
                 item["animation"] = str(tp["animation"])
+            # テロップ個別スタイル（フォント/文字色/縁色/サイズ/エフェクト）
+            if tp.get("font"):
+                f = valid_font(str(tp["font"]), "")
+                if f:
+                    item["font"] = f
+            for ck in ("color", "outline_color"):
+                cv = tp.get(ck)
+                if isinstance(cv, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", cv):
+                    item[ck] = cv.upper()
+            try:
+                if tp.get("size"):
+                    item["size"] = max(24, min(200, int(float(tp["size"]))))
+            except (TypeError, ValueError):
+                pass
+            try:
+                if tp.get("width"):   # テロップ個別の折返し幅（0.35-0.95）
+                    item["width"] = round(max(0.35, min(0.95, float(tp["width"]))), 3)
+            except (TypeError, ValueError):
+                pass
+            if tp.get("effect") in ("none", "glow", "sparkle", "horror", "neon",
+                                    "rainbow", "gold", "jitter"):
+                item["effect"] = tp["effect"]
+            try:
+                if tp.get("anim_speed"):   # テロップ個別のアニメ速度（0.25〜3倍）
+                    item["anim_speed"] = round(max(0.25, min(3.0, float(tp["anim_speed"]))), 2)
+            except (TypeError, ValueError):
+                pass
             try:
                 if int(tp.get("layer") or 0):
                     item["layer"] = max(0, min(20, int(tp["layer"])))
@@ -622,6 +815,37 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
             except (TypeError, ValueError):
                 continue
         m["sfx"] = items
+
+    # 画像オーバーレイ（貼り付け画像）。file はこのジョブフォルダ内の img_* のみ許可。
+    if isinstance(payload.get("images"), list):
+        imgs = []
+        for it in payload["images"]:
+            if not isinstance(it, dict):
+                continue
+            fname = Path(str(it.get("file", ""))).name
+            if not re.fullmatch(r"img_[0-9a-f]{8}\.(png|jpg|webp)", fname):
+                continue
+            if not (_job_dir(job) / fname).exists():
+                continue
+            try:
+                _anims = ("none", "fade", "zoom", "left", "right", "top", "bottom")
+                imgs.append({
+                    "file": fname,
+                    "x": max(0.0, min(1.0, float(it.get("x", 0.5)))),
+                    "y": max(0.0, min(1.0, float(it.get("y", 0.5)))),
+                    "scale": max(0.05, min(1.0, float(it.get("scale", 0.35)))),
+                    "start": round(max(0.0, float(it.get("start", 0.0))), 3),
+                    "end": round(max(0.0, float(it.get("end", 0.0))), 3),
+                    "opacity": round(max(0.05, min(1.0, float(it.get("opacity", 1.0) or 1.0))), 3),
+                    # イン/アウトのアニメ種別と長さ（秒）。旧 fade_in/fade_out は UI 読込時に移行済み。
+                    "anim_in": (it.get("anim_in") if it.get("anim_in") in _anims else "none"),
+                    "anim_out": (it.get("anim_out") if it.get("anim_out") in _anims else "none"),
+                    "in_dur": round(max(0.1, min(2.0, float(it.get("in_dur", 0.4) or 0.4))), 2),
+                    "out_dur": round(max(0.1, min(2.0, float(it.get("out_dur", 0.4) or 0.4))), 2),
+                })
+            except (TypeError, ValueError):
+                continue
+        m["images"] = imgs
 
     # 部分カット（残し区間 keeps＝元クリップ時間の[a,b]）。null/空でカット解除（全区間）。
     # フロントは telops/sfx を圧縮時間に再配置済みで送る。clip_duration は keeps から再計算。
@@ -705,6 +929,7 @@ _BULK_STYLE_KEYS = {
     "title_outline_color", "caption_size", "title_size", "outline_width",
     "title_outline_width", "box", "box_color", "box_pad", "animate", "animation", "effect",
     "exit_animation", "karaoke", "shadow_depth", "shadow_alpha", "shadow_blur",
+    "animation_speed",
 }
 
 
@@ -798,11 +1023,14 @@ def _extend_clip(job: str, m: dict, ext_s: float, ext_e: float) -> None:
             continue
         if tp.get("style"):
             item["style"] = tp["style"]
-        # 編集済みの強調・アニメ・レイヤー・位置も延長で消さない
+        # 編集済みの強調・アニメ・個別スタイル・レイヤー・位置も延長で消さない
         if tp.get("emphasis"):
             item["emphasis"] = True
         if tp.get("animation"):
             item["animation"] = str(tp["animation"])
+        for sk in ("font", "color", "outline_color", "size", "width", "effect", "anim_speed"):
+            if tp.get(sk):
+                item[sk] = tp[sk]
         try:
             if int(tp.get("layer") or 0):
                 item["layer"] = max(0, min(20, int(tp["layer"])))
@@ -829,6 +1057,19 @@ def _extend_clip(job: str, m: dict, ext_s: float, ext_e: float) -> None:
     m["keeps"] = None
     m["clip_duration"] = round(new_end - new_start, 2)
     m["telops"] = captions.tag_alerts(head + kept + tail)
+
+    # 画像オーバーレイの時刻も頭の延長ぶんずらす（新しい尺の範囲にクランプ）
+    new_dur = new_end - new_start
+    imgs = []
+    for im in (m.get("images") or []):
+        try:
+            s2 = max(0.0, min(new_dur, float(im.get("start", 0)) + shift))
+            e2 = max(0.0, min(new_dur, float(im.get("end", 0)) + shift))
+        except (TypeError, ValueError):
+            continue
+        if e2 > s2 + 0.05:
+            imgs.append({**im, "start": round(s2, 3), "end": round(e2, 3)})
+    m["images"] = imgs
 
 
 @app.get("/api/download/{path:path}")

@@ -41,3 +41,8 @@ packaging/ffmpeg/*.exe
 # OS
 .DS_Store
 Thumbs.db
+
+# ローカル設定・ユーザーデータ（コミットしない）
+.prefs.json
+user_sfx/
+.claude/
