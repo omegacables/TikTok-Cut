@@ -2945,6 +2945,29 @@ function edRenderSelImg(ed) {
 }
 // 再生位置にアクティブな画像チップを描画。再生中は焼き込み済み（保存時と同一内容）を隠す
 // ＝テロップ(_telopsPristine)と同じ「焼込み済みは動画に任せ、未保存分だけ重ねる」パターン。
+// ===== 中央ガイド線（ドラッグ中、中心付近で赤い線を出して吸着） =====
+function _edEnsureGuides(frame) {
+  if (!frame.querySelector('.ed-guide-v')) {
+    frame.insertAdjacentHTML('beforeend',
+      '<div class="ed-guide ed-guide-v" hidden></div><div class="ed-guide ed-guide-h" hidden></div>');
+  }
+}
+// ドラッグ中の正規化座標 (x,y) を評価し、中央±2%なら吸着して該当ガイド線を表示。
+// 戻り値は吸着後の座標。ドラッグ終了時は _edGuideHide で必ず消すこと。
+function _edGuideSnap(frame, x, y) {
+  _edEnsureGuides(frame);
+  const thr = 0.02;
+  const sx = Math.abs(x - 0.5) < thr;
+  const sy = Math.abs(y - 0.5) < thr;
+  const gv = frame.querySelector('.ed-guide-v'), gh = frame.querySelector('.ed-guide-h');
+  if (gv) gv.hidden = !sx;
+  if (gh) gh.hidden = !sy;
+  return { x: sx ? 0.5 : x, y: sy ? 0.5 : y };
+}
+function _edGuideHide(frame) {
+  if (frame) frame.querySelectorAll('.ed-guide').forEach(g => { g.hidden = true; });
+}
+
 // 画像チップのスタイルを再生位置 t で評価して適用（イン/アウトアニメ・透明度）。
 // 焼込み側 overlay_images の式と同じモデル＝シークで途中経過・再生で実際に動く。
 function _applyImgChipStyle(ed, el, im, t) {
@@ -3045,8 +3068,9 @@ function _attachImgChipDrag(ed, el, uid) {
       el.style.width = (im.scale * 100) + '%';
     } else if (dragging) {
       const r = frame.getBoundingClientRect();
-      const x = Math.max(0.02, Math.min(0.98, (e.clientX - r.left) / r.width));
-      const y = Math.max(0.02, Math.min(0.98, (e.clientY - r.top) / r.height));
+      let x = Math.max(0.02, Math.min(0.98, (e.clientX - r.left) / r.width));
+      let y = Math.max(0.02, Math.min(0.98, (e.clientY - r.top) / r.height));
+      const g = _edGuideSnap(frame, x, y); x = g.x; y = g.y;   // 中央ガイド＋吸着
       im.x = +x.toFixed(3); im.y = +y.toFixed(3);
       el.style.left = (x * 100) + '%'; el.style.top = (y * 100) + '%';
     }
@@ -3054,6 +3078,7 @@ function _attachImgChipDrag(ed, el, uid) {
   const up = e => {
     if (!dragging && !resizing) return;
     dragging = false; resizing = false; ed._chipDragging = false;
+    _edGuideHide(frame);
     try { el.releasePointerCapture(e.pointerId); } catch (_) {}
     edRenderSelImg(ed);
   };
@@ -3122,8 +3147,9 @@ function _attachTelopChipDrag(ed, chip, ti) {
       chip.style.width = (tp.width * 100) + '%';
     } else {   // move
       const r = frame.getBoundingClientRect();
-      const x = Math.max(0.03, Math.min(0.97, (e.clientX - r.left) / r.width));
-      const y = Math.max(0.03, Math.min(0.97, (e.clientY - r.top) / r.height));
+      let x = Math.max(0.03, Math.min(0.97, (e.clientX - r.left) / r.width));
+      let y = Math.max(0.03, Math.min(0.97, (e.clientY - r.top) / r.height));
+      const g = _edGuideSnap(frame, x, y); x = g.x; y = g.y;   // 中央ガイド＋吸着
       chip.style.left = (x * 100) + '%'; chip.style.top = (y * 100) + '%';
       tp.pos = { x: +x.toFixed(3), y: +y.toFixed(3) };
     }
@@ -3132,6 +3158,7 @@ function _attachTelopChipDrag(ed, chip, ti) {
     if (!mode) return;
     const redo = mode !== 'move';
     mode = null; ed._chipDragging = false;
+    _edGuideHide(frame);
     try { chip.releasePointerCapture(e.pointerId); } catch (_) {}
     if (redo) {
       renderPreviewTelops(ed);   // サイズ/幅確定後に全チップを正しい折返しで再描画
@@ -3202,8 +3229,9 @@ function initPosEditor(ed) {
     let dragging = false, resizing = false, widthing = false, rz = null;
     const move = (cx, cy) => {
       const r = frame.getBoundingClientRect();
-      const x = Math.max(0.03, Math.min(0.97, (cx - r.left) / r.width));
-      const y = Math.max(0.03, Math.min(0.97, (cy - r.top) / r.height));
+      let x = Math.max(0.03, Math.min(0.97, (cx - r.left) / r.width));
+      let y = Math.max(0.03, Math.min(0.97, (cy - r.top) / r.height));
+      const g = _edGuideSnap(frame, x, y); x = g.x; y = g.y;   // 中央ガイド＋吸着
       chip.style.left = (x * 100) + '%'; chip.style.top = (y * 100) + '%';
       const pos = { x: +x.toFixed(3), y: +y.toFixed(3) };
       if (isTitle) ed._titlePos = pos; else ed._capPos = pos;
@@ -3259,7 +3287,7 @@ function initPosEditor(ed) {
       else if (widthing) widthResize(e.clientX);
       else if (dragging) move(e.clientX, e.clientY);
     });
-    const up = e => { dragging = false; resizing = false; widthing = false; try { chip.releasePointerCapture(e.pointerId); } catch (_) {} };
+    const up = e => { dragging = false; resizing = false; widthing = false; _edGuideHide(frame); try { chip.releasePointerCapture(e.pointerId); } catch (_) {} };
     chip.addEventListener('pointerup', up);
     chip.addEventListener('pointercancel', up);
   });
