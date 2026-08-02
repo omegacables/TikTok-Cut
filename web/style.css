@@ -244,13 +244,17 @@ textarea:focus { outline: none; border-color: var(--accent-2); }
 @keyframes pvShake { 0%,100% { transform: translate(0,0) rotate(-1.2deg); } 25% { transform: translate(1.5px,-1px) rotate(1.2deg); } 50% { transform: translate(-1.5px,1px) rotate(-1deg); } 75% { transform: translate(1px,1.5px) rotate(1deg); } }
 
 /* 文字エフェクト（CSS 近似） */
-/* 光彩: 文字色そのものが強く発光して見えるよう currentColor で多重ハロー＋脈動 */
+/* 光彩: 文字色そのものが強く発光して見えるよう currentColor で多重ハロー＋脈動。
+   --fx はエフェクト強度（1=標準）。焼き込み側 _effect_group の倍率と同じ考え方。 */
 @keyframes pvGlowPulse { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.35); } }
-.pv-eff-glow { text-shadow: 0 0 4px #fff, 0 0 10px currentColor, 0 0 22px currentColor,
-  0 0 36px currentColor !important; animation: pvGlowPulse 1.6s ease-in-out infinite; }
-.pv-eff-horror { color: #e23b3b !important; text-shadow: 0 0 7px #500, 0 0 2px #200; }
+.pv-eff-glow { text-shadow: 0 0 calc(4px * var(--fx,1)) #fff,
+  0 0 calc(10px * var(--fx,1)) currentColor, 0 0 calc(22px * var(--fx,1)) currentColor,
+  0 0 calc(36px * var(--fx,1)) currentColor !important; animation: pvGlowPulse 1.6s ease-in-out infinite; }
+.pv-eff-horror { color: #e23b3b !important;
+  text-shadow: 0 0 calc(7px * var(--fx,1)) #500, 0 0 calc(2px * var(--fx,1)) #200; }
 /* キラキラ: 金色のきらめき＋文字の周りで瞬く★（実描画では★粒子を焼き込む） */
-.pv-eff-sparkle { text-shadow: 0 0 6px rgba(255,230,0,.9), 0 0 14px rgba(255,230,0,.55) !important; }
+.pv-eff-sparkle { text-shadow: 0 0 calc(6px * var(--fx,1)) rgba(255,230,0,.9),
+  0 0 calc(14px * var(--fx,1)) rgba(255,230,0,.55) !important; }
 /* チップは既に position:absolute（配置を壊さないよう、未配置の要素だけ relative 化） */
 .pv-eff-sparkle:not(.ed-chip) { position: relative; }
 .pv-eff-sparkle::before, .pv-eff-sparkle::after { position: absolute; color: #FFE600; font-size: .8em;
@@ -800,9 +804,9 @@ html { font-size: 108%; }
 .pv-ch { display: inline-block; }
 @keyframes pvChPop { from { opacity: 0; transform: scale(.4); } to { opacity: 1; transform: scale(1); } }
 @keyframes pvChShow { from { opacity: 0; } to { opacity: 1; } }
-@keyframes pvChKara { to { color: var(--pv-kara, #FFE600); } }
 /* ネオン: 発光ピンクの縁 */
-.pv-eff-neon { text-shadow: 0 0 5px #ee3bff, 0 0 12px #ee3bff, 0 0 22px rgba(238,59,255,.7) !important; }
+.pv-eff-neon { text-shadow: 0 0 calc(5px * var(--fx,1)) #ee3bff, 0 0 calc(12px * var(--fx,1)) #ee3bff,
+  0 0 calc(22px * var(--fx,1)) rgba(238,59,255,.7) !important; }
 /* 虹色（パチンコの虹演出風）: 高速で色を回し続ける＋白発光（焼込み側 _rainbow_tags と同調） */
 @keyframes pvRainbow { 0% { color: #ff3030; } 14% { color: #ff9900; } 28% { color: #ffee00; }
   42% { color: #2ee66b; } 56% { color: #25f4ee; } 70% { color: #4066ff; } 84% { color: #ff2dcc; } 100% { color: #ff3030; } }
@@ -815,12 +819,19 @@ html { font-size: 108%; }
 .pv-eff-gold { color: #FFC31C !important; -webkit-text-stroke-color: #8F5C0E !important;
   text-shadow: 0 1px 2px rgba(90,60,0,.6), 0 0 10px rgba(255,195,28,.45) !important; }
 /* ジッター: 常時微振動（rotate独立プロパティ＝translateと干渉しない） */
-@keyframes pvJitter { 0% { rotate: 1.2deg; } 25% { rotate: -1.1deg; } 50% { rotate: 0.9deg; }
-  75% { rotate: -1.2deg; } 100% { rotate: 1.2deg; } }
+@keyframes pvJitter { 0% { rotate: calc(1.2deg * var(--fx,1)); } 25% { rotate: calc(-1.1deg * var(--fx,1)); }
+  50% { rotate: calc(0.9deg * var(--fx,1)); } 75% { rotate: calc(-1.2deg * var(--fx,1)); }
+  100% { rotate: calc(1.2deg * var(--fx,1)); } }
 .pv-eff-jitter { animation: pvJitter .45s steps(4) infinite; }
-/* 詳細編集: カラオケトグル */
-.ed-kara-item { display: flex; align-items: center; gap: 8px; }
-.ed-kara-item input { width: 18px; height: 18px; accent-color: var(--accent-2); }
+/* 一括設定セクション（字幕/タイトル/画面構成）のトグル */
+.ed-sec-btn.on { border-color: var(--accent-2); color: var(--accent-2); }
+.ed-sec .ed-pos-side { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px 16px; }
+.ed-sec input[type=color] { width: 46px; height: 30px; padding: 1px 2px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--surface); cursor: pointer; }
+.ed-t-xspd, .ed-t-fxk { width: 62px; flex: 0 0 auto; padding: 5px 4px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .76rem; }
+.ed-t-exit { flex: 0 0 auto; max-width: 130px; padding: 5px 4px; background: var(--surface-2);
+  border: 1px solid var(--border); border-radius: 6px; color: var(--text); font-size: .76rem; }
 
 /* ===== 見た目つきピッカー（アニメ/エフェクト選択・フォント選択と同じ思想） ===== */
 .fxp-btn { display: inline-flex; align-items: center; gap: 6px; padding: 6px 8px;

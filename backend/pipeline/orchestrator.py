@@ -95,9 +95,9 @@ def render_from_manifest(input_video, job_dir: Path, m: dict) -> tuple[Path, Pat
         animation=st.get("animation"),
         animation_speed=st.get("animation_speed"),
         exit_animation=st.get("exit_animation"),
-        karaoke=bool(st.get("karaoke")),
-        highlight_color=st.get("highlight_color"),   # カラオケの発話済み色
+        exit_speed=st.get("exit_speed"),
         effect=st.get("effect"),
+        effect_strength=st.get("effect_strength"),
         caption_size=st.get("caption_size"),
         caption_width=st.get("caption_width"),
         title_size=st.get("title_size"),

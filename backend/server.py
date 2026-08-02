@@ -357,8 +357,10 @@ def process(  # 同期def＝FastAPIがスレッドプールで実行（巨大ア
     animate: str = Form("1"),
     animation: str = Form(""),
     exit_animation: str = Form(""),
-    karaoke: str = Form("0"),
     effect: str = Form(""),
+    effect_strength: str = Form(""),
+    exit_speed: str = Form(""),
+    animation_speed: str = Form(""),
     tempo: str = Form("off"),
     genres: str = Form(""),
     user_prompt: str = Form(""),
@@ -440,8 +442,10 @@ def process(  # 同期def＝FastAPIがスレッドプールで実行（巨大ア
         "animate": str(animate).lower() not in ("0", "false", "off", ""),
         "animation": animation or None,
         "exit_animation": exit_animation or None,
-        "karaoke": str(karaoke).lower() in ("1", "true", "on"),
         "effect": effect or None,
+        "effect_strength": _num(effect_strength),
+        "animation_speed": _num(animation_speed),
+        "exit_speed": _num(exit_speed),
         "caption_size": _num(caption_size),
         "title_size": _num(title_size),
         "outline_width": _num(outline_width),
@@ -765,11 +769,15 @@ def update_clip(job: str, cid: int, payload: dict = Body(...)):
             if tp.get("effect") in ("none", "glow", "sparkle", "horror", "neon",
                                     "rainbow", "gold", "jitter"):
                 item["effect"] = tp["effect"]
-            try:
-                if tp.get("anim_speed"):   # テロップ個別のアニメ速度（0.25〜3倍）
-                    item["anim_speed"] = round(max(0.25, min(3.0, float(tp["anim_speed"]))), 2)
-            except (TypeError, ValueError):
-                pass
+            if tp.get("exit") in ("none", "fade", "shrink", "blurout", "flip"):
+                item["exit"] = tp["exit"]     # テロップ個別のアニメーション（アウト）
+            for nk, lo, hi in (("anim_speed", 0.25, 3.0), ("exit_speed", 0.25, 3.0),
+                               ("effect_strength", 0.2, 3.0)):
+                try:
+                    if tp.get(nk):           # 個別のアニメ速度（イン/アウト）・エフェクト強度
+                        item[nk] = round(max(lo, min(hi, float(tp[nk]))), 2)
+                except (TypeError, ValueError):
+                    pass
             try:
                 if int(tp.get("layer") or 0):
                     item["layer"] = max(0, min(20, int(tp["layer"])))
@@ -928,8 +936,8 @@ _BULK_STYLE_KEYS = {
     "font", "subtitle_color", "highlight_color", "emphasis_color", "outline_color", "title_color",
     "title_outline_color", "caption_size", "title_size", "outline_width",
     "title_outline_width", "box", "box_color", "box_pad", "animate", "animation", "effect",
-    "exit_animation", "karaoke", "shadow_depth", "shadow_alpha", "shadow_blur",
-    "animation_speed",
+    "exit_animation", "shadow_depth", "shadow_alpha", "shadow_blur",
+    "animation_speed", "exit_speed", "effect_strength", "caption_width", "title_width",
 }
 
 
@@ -1028,7 +1036,8 @@ def _extend_clip(job: str, m: dict, ext_s: float, ext_e: float) -> None:
             item["emphasis"] = True
         if tp.get("animation"):
             item["animation"] = str(tp["animation"])
-        for sk in ("font", "color", "outline_color", "size", "width", "effect", "anim_speed"):
+        for sk in ("font", "color", "outline_color", "size", "width", "effect",
+                   "effect_strength", "anim_speed", "exit", "exit_speed"):
             if tp.get(sk):
                 item[sk] = tp[sk]
         try:

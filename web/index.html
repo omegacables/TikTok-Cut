@@ -286,7 +286,7 @@
           </select>
         </div>
         <div class="field small">
-          <label for="animSelect">字幕アニメーション <span class="opt">（出現の動き）</span></label>
+          <label for="animSelect">アニメーション（イン） <span class="opt">（出現の動き）</span></label>
           <select id="animSelect">
             <option value="default" selected>ポップイン（標準）</option>
             <option value="none">なし</option>
@@ -307,7 +307,7 @@
           </select>
         </div>
         <div class="field small">
-          <label for="exitSelect">退場アニメ <span class="opt">（消えるときの動き）</span></label>
+          <label for="exitSelect">アニメーション（アウト） <span class="opt">（消えるときの動き）</span></label>
           <select id="exitSelect">
             <option value="none" selected>なし</option>
             <option value="fade">フェードアウト</option>
@@ -317,12 +317,14 @@
           </select>
         </div>
         <div class="field small">
-          <label>単語カラオケ <span class="opt">（しゃべった所まで色が変わる）</span></label>
-          <div style="display:flex;flex-direction:column;gap:8px;">
-            <label class="switch" style="display:flex;align-items:center;gap:9px;padding:10px 12px;background:var(--surface-2);border:1px solid var(--border);border-radius:9px;font-size:.85rem;">
-              <input type="checkbox" id="karaOn" style="width:18px;height:18px;accent-color:var(--accent);">
-              <span style="color:var(--muted);">🎤 カラオケ字幕にする（色は「強調の色」）</span>
-            </label>
+          <label>アニメ速度・エフェクト強度 <span class="opt">（作成後も詳細編集で変更できます）</span></label>
+          <div class="slider-grid">
+            <label class="slider-item">イン速度 <b id="animSpeedOut">100</b>%
+              <input type="range" id="animSpeed" min="25" max="300" step="5" value="100"></label>
+            <label class="slider-item">アウト速度 <b id="exitSpeedOut">100</b>%
+              <input type="range" id="exitSpeed" min="25" max="300" step="5" value="100"></label>
+            <label class="slider-item">エフェクトの強度 <b id="fxStrengthOut">100</b>%
+              <input type="range" id="fxStrength" min="20" max="300" step="10" value="100"></label>
           </div>
         </div>
         <div class="field small">

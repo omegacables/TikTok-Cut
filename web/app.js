@@ -230,8 +230,9 @@ async function startProcess() {
   fd.append('animate', animV === 'none' ? '0' : '1');
   const exitEl = document.getElementById('exitSelect');
   fd.append('exit_animation', exitEl ? exitEl.value : 'none');
-  const karaEl = document.getElementById('karaOn');
-  fd.append('karaoke', karaEl && karaEl.checked ? '1' : '0');
+  fd.append('effect_strength', document.getElementById('fxStrength').value);
+  fd.append('animation_speed', String((+document.getElementById('animSpeed').value || 100) / 100));
+  fd.append('exit_speed', String((+document.getElementById('exitSpeed').value || 100) / 100));
   fd.append('tempo', document.getElementById('tempo').value);
   fd.append('font', document.getElementById('fontSelect').value || '');
   fd.append('subtitle_color', document.getElementById('cSub').value);
@@ -525,7 +526,7 @@ function _pvApplyEff(el, eff) {
   PV_EFFS.forEach(x => el.classList.remove('pv-eff-' + x));
   if (eff && eff !== 'none' && PV_EFFS.indexOf(eff) >= 0) el.classList.add('pv-eff-' + eff);
 }
-// stagger/typewriter/karaoke のチップ描画: 1文字ずつ<span>にして遅延アニメ（焼き込みの近似）。
+// stagger/typewriter のチップ描画: 1文字ずつ<span>にして遅延アニメ（焼き込みの近似）。
 // elapsedSec（テロップ開始からの経過秒）ぶん負の delay でずらす＝シーク位置でも途中経過が正しく見える。
 // 一時停止中は play-state: paused でその瞬間の状態のまま静止。
 function _pvCharSpans(text, maxChars, maxLines, mode, durSec, elapsedSec, playing, speed) {
@@ -533,13 +534,12 @@ function _pvCharSpans(text, maxChars, maxLines, mode, durSec, elapsedSec, playin
   const total = Math.max(1, lines.join('').length);
   const off = Math.round((elapsedSec || 0) * 1000);
   const ps = ';animation-play-state:' + (playing ? 'running' : 'paused');
-  const spd = (+speed > 0) ? +speed : 1;   // 入場速度倍率（stagger/typewriter のみ・カラオケは発話同期）
+  const spd = (+speed > 0) ? +speed : 1;   // 入場速度倍率（stagger/typewriter）
   let k = 0;
   const mk = ch => {
     let st = '';
     if (mode === 'stagger') st = 'animation:pvChPop .15s ease-out both;animation-delay:' + (Math.round(Math.min(600, k * 45) / spd) - off) + 'ms' + ps;
     else if (mode === 'typewriter') st = 'animation:pvChShow 1ms steps(1) both;animation-delay:' + (Math.round(Math.min(600, k * 45) / spd) - off) + 'ms' + ps;
-    else if (mode === 'karaoke') st = 'animation:pvChKara .12s linear both;animation-delay:' + (Math.round(k * (Math.max(0.3, durSec) * 920 / total)) - off) + 'ms' + ps;
     k++;
     return '<span class="pv-ch" style="' + st + '">' + esc(ch) + '</span>';
   };
@@ -560,6 +560,8 @@ function optionsHtml(list, sel) {
 const TANIM_OPTS = [['', '（既定）']].concat(ANIM_OPTS.filter(o => o[0] !== 'default'));
 // テロップ個別エフェクト（''=クリップ既定・'none'=明示的に無し）
 const TEFFECT_OPTS = [['', '（既定）']].concat(EFFECT_OPTS);
+// テロップ個別のアニメーション（アウト）（''=一括設定に従う）
+const TEXIT_OPTS = [['', '（既定）']].concat(EXIT_OPTS);
 // テロップ個別フォントの options HTML（''=クリップ既定）。各行にそのフォント自体を適用して
 // 見た目で選べるようにする（@font-face は initFonts が document 全体に注入済み）。
 function _tFontOpts(sel) {
@@ -803,7 +805,9 @@ function edClone(arr) {
   return (arr || []).map(t => ({ start: +t.start || 0, end: +t.end || 0, text: t.text || '',
     style: t.style || '', emphasis: !!t.emphasis, animation: t.animation || '',
     font: t.font || '', color: t.color || '', outline_color: t.outline_color || '',
-    size: +t.size || 0, width: +t.width || 0, effect: t.effect || '', anim_speed: +t.anim_speed || 0,
+    size: +t.size || 0, width: +t.width || 0, effect: t.effect || '',
+    effect_strength: +t.effect_strength || 0, anim_speed: +t.anim_speed || 0,
+    exit: t.exit || '', exit_speed: +t.exit_speed || 0,
     layer: +t.layer || 0, pos: (t.pos && t.pos.x != null) ? { x: +t.pos.x, y: +t.pos.y } : null }));
 }
 function edTip(e, msg) { const tip = document.getElementById('subTooltip'); if (!tip) return; tip.textContent = msg; tip.hidden = false; tip.style.left = (e.clientX + 12) + 'px'; tip.style.top = (e.clientY + 12) + 'px'; }
@@ -1045,14 +1049,18 @@ function edRenderSelTelop(ed) {
   const pv = ed._pv || {};
   const defSz = +((ed.querySelector('.ed-capsz') || {}).value) || 74;
   const defSpd = Math.round(+((ed.querySelector('.ed-aspd') || {}).value) || 100);
+  const defXspd = Math.round(+((ed.querySelector('.ed-xspd') || {}).value) || 100);
+  const defFxk = Math.round(+((ed.querySelector('.ed-fxk') || {}).value) || 100);
   const nMulti = (ed._selSet && ed._selSet.size > 1 && ed._selSet.has(tp)) ? ed._selSet.size : 0;
   panel.innerHTML =
     '<span class="ed-sel-cap">選択中の字幕' +
       (nMulti ? '<b class="ed-msel-note">（' + nMulti + '個選択中：スタイル・アニメの変更は選択した全部に適用されます）</b>' : '') + '</span>' +
     '<label>開始<input class="ed-t-s" type="number" step="0.1" min="0" value="' + (+tp.start).toFixed(1) + '"></label>' +
     '<label>終了<input class="ed-t-e" type="number" step="0.1" min="0" value="' + (+tp.end).toFixed(1) + '"></label>' +
-    '<label>アニメ<select class="ed-t-anim">' + optionsHtml(TANIM_OPTS, tp.animation || '') + '</select></label>' +
-    '<label title="この字幕だけの入退場アニメ速度（%・空欄＝クリップ既定）">速度<input class="ed-t-aspd" type="number" min="25" max="300" step="5" placeholder="' + defSpd + '" value="' + (tp.anim_speed ? Math.round(tp.anim_speed * 100) : '') + '">%</label>' +
+    '<label title="この字幕だけのアニメーション（イン）">アニメ(イン)<select class="ed-t-anim">' + optionsHtml(TANIM_OPTS, tp.animation || '') + '</select></label>' +
+    '<label title="この字幕だけのイン速度（%・空欄＝一括設定に従う）">速度<input class="ed-t-aspd" type="number" min="25" max="300" step="5" placeholder="' + defSpd + '" value="' + (tp.anim_speed ? Math.round(tp.anim_speed * 100) : '') + '">%</label>' +
+    '<label title="この字幕だけのアニメーション（アウト）">アニメ(アウト)<select class="ed-t-exit">' + optionsHtml(TEXIT_OPTS, tp.exit || '') + '</select></label>' +
+    '<label title="この字幕だけのアウト速度（%・空欄＝一括設定に従う）">速度<input class="ed-t-xspd" type="number" min="25" max="300" step="5" placeholder="' + defXspd + '" value="' + (tp.exit_speed ? Math.round(tp.exit_speed * 100) : '') + '">%</label>' +
     '<label>層<input class="ed-t-layer" type="number" min="0" max="9" value="' + (tp.layer || 0) + '"></label>' +
     '<label class="ed-flag"><input type="checkbox" class="ed-emph-cb"' + (tp.emphasis ? ' checked' : '') + '>強調</label>' +
     '<label class="ed-flag"><input type="checkbox" class="ed-alert-cb"' + (tp.style === 'alert' ? ' checked' : '') + '>ｱﾗｰﾄ</label>' +
@@ -1066,6 +1074,7 @@ function edRenderSelTelop(ed) {
     '<label title="この字幕だけの文字サイズ（空欄＝クリップ既定）">サイズ<input class="ed-t-size" type="number" min="24" max="200" step="2" placeholder="' + defSz + '" value="' + (tp.size || '') + '"></label>' +
     '<label title="この字幕だけの折返し幅（%・空欄＝クリップ既定。広げると自動改行が減ります）">幅<input class="ed-t-width" type="number" min="35" max="95" step="1" placeholder="' + Math.round(+((ed.querySelector('.ed-capw') || {}).value) || 66) + '" value="' + (tp.width ? Math.round(tp.width * 100) : '') + '">%</label>' +
     '<label title="この字幕だけの文字エフェクト">エフェクト<select class="ed-t-eff">' + optionsHtml(TEFFECT_OPTS, tp.effect || '') + '</select></label>' +
+    '<label title="この字幕だけのエフェクト強度（%・空欄＝一括設定に従う）">強度<input class="ed-t-fxk" type="number" min="20" max="300" step="10" placeholder="' + defFxk + '" value="' + (tp.effect_strength ? Math.round(tp.effect_strength * 100) : '') + '">%</label>' +
     '<button type="button" class="mini-btn ed-t-styreset" title="この字幕の色・フォント・サイズ・エフェクトを既定に戻す">↺ 既定に戻す</button>';
   // フォントセレクト自体を選択中フォントで表示（閉じていても見た目が分かる）
   const fsel = panel.querySelector('.ed-t-font');
@@ -1115,6 +1124,17 @@ function edWireSelTelop(ed) {
       targets(tp).forEach(t => { t.anim_speed = v > 0 ? Math.max(0.25, Math.min(3, v / 100)) : 0; });
       renderPreviewTelops(ed, true);
     }
+    else if (e.target.classList.contains('ed-t-xspd')) {
+      edPushUndo(ed, 'tsel-xs');
+      const v = +e.target.value || 0;
+      targets(tp).forEach(t => { t.exit_speed = v > 0 ? Math.max(0.25, Math.min(3, v / 100)) : 0; });
+    }
+    else if (e.target.classList.contains('ed-t-fxk')) {
+      edPushUndo(ed, 'tsel-fx');
+      const v = +e.target.value || 0;
+      targets(tp).forEach(t => { t.effect_strength = v > 0 ? Math.max(0.2, Math.min(3, v / 100)) : 0; });
+      renderPreviewTelops(ed);
+    }
   });
   panel.addEventListener('change', e => {
     const tp = (ed._telops || [])[ed._selTelop]; if (!tp) return;
@@ -1128,13 +1148,15 @@ function edWireSelTelop(ed) {
       renderPreviewTelops(ed);
     }
     else if (e.target.classList.contains('ed-t-eff')) { edPushUndo(ed); targets(tp).forEach(t => { t.effect = e.target.value; }); renderPreviewTelops(ed); }
+    else if (e.target.classList.contains('ed-t-exit')) { edPushUndo(ed); targets(tp).forEach(t => { t.exit = e.target.value; }); }
   });
   panel.addEventListener('click', e => {
     if (!e.target.classList.contains('ed-t-styreset')) return;
     const tp = (ed._telops || [])[ed._selTelop]; if (!tp) return;
     edPushUndo(ed);
     targets(tp).forEach(t => {
-      t.color = ''; t.outline_color = ''; t.font = ''; t.size = 0; t.width = 0; t.effect = ''; t.anim_speed = 0;
+      t.color = ''; t.outline_color = ''; t.font = ''; t.size = 0; t.width = 0;
+      t.effect = ''; t.effect_strength = 0; t.anim_speed = 0; t.exit = ''; t.exit_speed = 0;
     });
     edRenderSelTelop(ed); renderPreviewTelops(ed);
   });
@@ -1508,13 +1530,24 @@ document.addEventListener('keydown', e => {
     if (edDeleteSelection(ed)) e.preventDefault();
   }
 });
-// クリップ全体スタイル設定パネルの開閉（既定は閉＝選択中の字幕編集をメインに）
-function edToggleClipStyle(btn) {
+// 一括設定セクション（字幕/タイトル/画面構成）の開閉。既定は全て閉＝個別編集をメインに。
+const ED_SEC_LABEL = { cap: '💬 字幕一括設定', ttl: '🏷 タイトル一括設定', scr: '🖥 画面構成設定' };
+function edToggleSection(btn) {
   const ed = btn.closest('.clip-editor'); if (!ed) return;
-  const p = ed.querySelector('.ed-clipstyle'); if (!p) return;
-  p.hidden = !p.hidden;
-  btn.textContent = p.hidden ? '🎨 クリップ全体のスタイル設定 ▸' : '🎨 クリップ全体のスタイル設定 ▾';
-  btn.classList.toggle('on', !p.hidden);
+  const key = btn.dataset.sec;
+  const p = ed.querySelector('.ed-sec-' + key); if (!p) return;
+  const open = p.hidden;
+  // 一度に1つだけ開く（縦に長くならないように）
+  ed.querySelectorAll('.ed-sec').forEach(n => { n.hidden = true; });
+  ed.querySelectorAll('.ed-sec-btn').forEach(b => {
+    b.classList.remove('on');
+    b.textContent = ED_SEC_LABEL[b.dataset.sec] + ' ▸';
+  });
+  if (open) {
+    p.hidden = false;
+    btn.classList.add('on');
+    btn.textContent = ED_SEC_LABEL[key] + ' ▾';
+  }
 }
 
 // タイムラインの高さを引き伸ばすバー（ドラッグで変更・prefs に保存＝次回も同じ高さ）
@@ -1903,6 +1936,8 @@ function closeInfo() { document.getElementById('infoModal').hidden = true; }
 const SLIDER_OUT = [['capSize', 'capSizeOut'], ['capOutline', 'capOutOut'],
                     ['titleSize', 'titleSizeOut'], ['titleOutline', 'titleOutOut'],
                     ['boxPad', 'boxPadOut'],
+                    ['animSpeed', 'animSpeedOut'], ['exitSpeed', 'exitSpeedOut'],
+                    ['fxStrength', 'fxStrengthOut'],
                     ['shadowD', 'shadowDOut'], ['shadowA', 'shadowAOut'], ['shadowB', 'shadowBOut']];
 function syncSliderLabels() {
   SLIDER_OUT.forEach(([i, o]) => {
@@ -1925,28 +1960,28 @@ function savePresets(p) { _prefs.presets = p; savePrefs(true); }   // プリセ�
 // ===== 組み込み見た目テンプレ（フォント＋色＋縁＋影＋アニメの完成セット・削除不可） =====
 const BUILTIN_PRESETS = [
   { name: '★ バラエティ黄色', style: { font: 'Dela Gothic One', sub: '#FFFFFF', hi: '#FFE600', out: '#000000', title: '#FFE600',
-      capSize: 78, capOutline: 8, titleSize: 88, titleOutline: 10, animation: 'pop', exit: 'none', karaoke: false, effect: 'none',
+      capSize: 78, capOutline: 8, titleSize: 88, titleOutline: 10, animation: 'pop', exit: 'none', effect: 'none',
       box: false, boxColor: '#000000', boxPad: 10, shadowD: 3, shadowA: 70, shadowB: 1 } },
   { name: '★ ゲーム実況ポップ', style: { font: 'Rounded Mplus 1c', sub: '#FFFFFF', hi: '#25F4EE', out: '#1E2A78', title: '#25F4EE',
-      capSize: 76, capOutline: 8, titleSize: 84, titleOutline: 9, animation: 'bounce', exit: 'fade', karaoke: true, effect: 'none',
+      capSize: 76, capOutline: 8, titleSize: 84, titleOutline: 9, animation: 'bounce', exit: 'fade', effect: 'none',
       box: false, boxColor: '#000000', boxPad: 10, shadowD: 2, shadowA: 60, shadowB: 0 } },
   { name: '★ ホラー・怪談', style: { font: 'Shippori Mincho B1', sub: '#E6E6E6', hi: '#FF2D2D', out: '#1A0000', title: '#FF2D2D',
-      capSize: 72, capOutline: 5, titleSize: 82, titleOutline: 7, animation: 'blurin', exit: 'blurout', karaoke: false, effect: 'horror',
+      capSize: 72, capOutline: 5, titleSize: 82, titleOutline: 7, animation: 'blurin', exit: 'blurout', effect: 'horror',
       box: false, boxColor: '#000000', boxPad: 10, shadowD: 6, shadowA: 85, shadowB: 3 } },
   { name: '★ ニュース速報', style: { font: 'BIZ UDPGothic', sub: '#FFFFFF', hi: '#FFE600', out: '#000000', title: '#FFFFFF',
-      capSize: 70, capOutline: 0, titleSize: 80, titleOutline: 8, animation: 'none', exit: 'none', karaoke: false, effect: 'none',
+      capSize: 70, capOutline: 0, titleSize: 80, titleOutline: 8, animation: 'none', exit: 'none', effect: 'none',
       box: true, boxColor: '#0A0A2E', boxPad: 14, shadowD: 0, shadowA: 60, shadowB: 0 } },
   { name: '★ かわいい・日常', style: { font: 'Hachi Maru Pop', sub: '#FFFFFF', hi: '#FF9BD2', out: '#7A3B5E', title: '#FFD1E8',
-      capSize: 76, capOutline: 7, titleSize: 86, titleOutline: 9, animation: 'stagger', exit: 'shrink', karaoke: false, effect: 'none',
+      capSize: 76, capOutline: 7, titleSize: 86, titleOutline: 9, animation: 'stagger', exit: 'shrink', effect: 'none',
       box: false, boxColor: '#000000', boxPad: 10, shadowD: 2, shadowA: 55, shadowB: 1 } },
   { name: '★ 感動・エモ', style: { font: 'Zen Maru Gothic', sub: '#FFF8E7', hi: '#FFD86B', out: '#4A3B2A', title: '#FFF8E7',
-      capSize: 72, capOutline: 5, titleSize: 82, titleOutline: 7, animation: 'fade', exit: 'fade', karaoke: false, effect: 'glow',
+      capSize: 72, capOutline: 5, titleSize: 82, titleOutline: 7, animation: 'fade', exit: 'fade', effect: 'glow',
       box: false, boxColor: '#000000', boxPad: 10, shadowD: 3, shadowA: 65, shadowB: 2 } },
   { name: '★ キル集・大会', style: { font: 'Train One', sub: '#FFFFFF', hi: '#FF2D55', out: '#000000', title: '#FF2D55',
-      capSize: 80, capOutline: 9, titleSize: 92, titleOutline: 11, animation: 'zoombig', exit: 'none', karaoke: false, effect: 'jitter',
+      capSize: 80, capOutline: 9, titleSize: 92, titleOutline: 11, animation: 'zoombig', exit: 'none', effect: 'jitter',
       box: false, boxColor: '#000000', boxPad: 10, shadowD: 4, shadowA: 75, shadowB: 0 } },
   { name: '★ 高級・ゴールド', style: { font: 'Yuji Syuku', sub: '#FFC31C', hi: '#FFE600', out: '#5C3A00', title: '#FFC31C',
-      capSize: 74, capOutline: 5, titleSize: 86, titleOutline: 8, animation: 'fade', exit: 'fade', karaoke: false, effect: 'gold',
+      capSize: 74, capOutline: 5, titleSize: 86, titleOutline: 8, animation: 'fade', exit: 'fade', effect: 'gold',
       box: false, boxColor: '#000000', boxPad: 10, shadowD: 3, shadowA: 70, shadowB: 1 } },
 ];
 
@@ -1986,7 +2021,7 @@ function currentStyleObj() {
     titleSize: +v('titleSize'), titleOutline: +v('titleOutline'),
     animation: v('animSelect'), effect: _effSel(),
     exit: (document.getElementById('exitSelect') || {}).value || 'none',
-    karaoke: !!(document.getElementById('karaOn') || {}).checked,
+    animSpeed: +v('animSpeed'), exitSpeed: +v('exitSpeed'), fxStrength: +v('fxStrength'),
     box: document.getElementById('boxOn').checked, boxColor: v('cBox'), boxPad: +v('boxPad'),
     shadowD: +v('shadowD'), shadowA: +v('shadowA'), shadowB: +v('shadowB'),
   };
@@ -2001,9 +2036,11 @@ function applyStyleObj(s) {
   if (s.boxPad != null) set('boxPad', s.boxPad);
   // アニメ/エフェクト（旧プリセットは animate:boolean のみ → 既定/なしに読み替え）
   set('animSelect', s.animation != null ? s.animation : (s.animate === false ? 'none' : 'default'));
+  set('animSpeed', s.animSpeed != null ? s.animSpeed : 100);
+  set('exitSpeed', s.exitSpeed != null ? s.exitSpeed : 100);
+  set('fxStrength', s.fxStrength != null ? s.fxStrength : 100);
   set('exitSelect', s.exit || 'none');
   _styleEffect = s.effect || 'none';   // テンプレの文字エフェクト（UIなし・送信時に _effSel() が返す）
-  const kEl = document.getElementById('karaOn'); if (kEl) kEl.checked = !!s.karaoke;
   set('shadowD', s.shadowD); set('shadowA', s.shadowA); set('shadowB', s.shadowB);
   if (typeof s.box === 'boolean') document.getElementById('boxOn').checked = s.box;
   syncSliderLabels(); updateFontPreview(); updatePreviewColors(); applyPreviewFx();
@@ -2073,7 +2110,8 @@ function restoreLastStyle() {
 }
 function wireStyleMemory() {
   ['fontSelect', 'cSub', 'cHi', 'cOut', 'cTitle', 'capSize', 'capOutline',
-   'titleSize', 'titleOutline', 'animSelect', 'exitSelect', 'karaOn', 'boxOn', 'cBox', 'boxPad',
+   'titleSize', 'titleOutline', 'animSelect', 'exitSelect', 'boxOn', 'cBox', 'boxPad',
+   'animSpeed', 'exitSpeed', 'fxStrength',
    'shadowD', 'shadowA', 'shadowB'].forEach(id => {
     const e = document.getElementById(id);
     if (e) {
@@ -2255,7 +2293,9 @@ async function loadEditor(ed) {
       start: +t.start || 0, end: +t.end || 0, text: t.text || '',
       style: t.style || '', emphasis: !!t.emphasis, animation: t.animation || '',
       font: t.font || '', color: t.color || '', outline_color: t.outline_color || '',
-      size: +t.size || 0, width: +t.width || 0, effect: t.effect || '', anim_speed: +t.anim_speed || 0,
+      size: +t.size || 0, width: +t.width || 0, effect: t.effect || '',
+    effect_strength: +t.effect_strength || 0, anim_speed: +t.anim_speed || 0,
+    exit: t.exit || '', exit_speed: +t.exit_speed || 0,
       layer: +t.layer || 0, pos: (t.pos && t.pos.x != null) ? { x: +t.pos.x, y: +t.pos.y } : null,
     });
     ed._telops = (data.telops || []).map(_mkTelop);
@@ -2309,13 +2349,14 @@ async function loadEditor(ed) {
     const shB = st.shadow_blur != null ? +st.shadow_blur : 0;                    // 影のぼかし
     const animV = st.animation || 'default';
     const effV = st.effect || 'none';
-    const aspdPct = Math.round((st.animation_speed || 1) * 100);   // アニメ速度（%）
+    const aspdPct = Math.round((st.animation_speed || 1) * 100);   // アニメ速度・イン（%）
+    const xspdPct = Math.round((st.exit_speed || st.animation_speed || 1) * 100);   // 同・アウト
+    const fxkPct = Math.round((st.effect_strength || 1) * 100);     // エフェクト強度（%）
     // WYSIWYG プレビュー用に、クリップのフォント・色・枠を控える（再描画前の見た目確認）
     ed._pv = {
       font: st.font || '', sub: st.subtitle_color || '#FFFFFF', out: st.outline_color || '#000000',
       title: st.title_color || '#FFFFFF', titleOut: st.title_outline_color || st.outline_color || '#000000',
       box: !!st.box, boxColor: st.box_color || '#000000', emph: st.emphasis_color || '#FFE600',
-      hl: st.highlight_color || '#FFE600',   // カラオケの発話済み色
     };
     const tp0 = ed._titlePos || { x: 0.5, y: 0.16 };
     ed._reframe = data.reframe || 'crop';
@@ -2352,51 +2393,63 @@ async function loadEditor(ed) {
     let h =
       '<label class="ed-label">タイトル</label>' +
       '<input class="ed-title" type="text" value="' + esc(data.title || '') + '">' +
-      // クリップ全体のスタイル（サイズ・影・アニメ等）は折りたたみ（既定は閉）
-      // ＝「選択中の字幕」の個別編集をメインのUIにする
+      // 一括設定は3分類の折りたたみ（既定は閉）＝「選択中の字幕」の個別編集をメインUIにする。
+      // ここでの変更は全字幕/タイトルへ効き、個々の字幕の設定があればそちらが優先される。
       '<div class="ed-clipstyle-bar">' +
-        '<button type="button" class="mini-btn ed-clipstyle-btn" onclick="edToggleClipStyle(this)">🎨 クリップ全体のスタイル設定 ▸</button>' +
-        '<span class="opt">サイズ・影・アニメなど全字幕共通の設定。1つずつの色・サイズ・フォントは下の字幕をクリックして変更できます。</span>' +
+        '<button type="button" class="mini-btn ed-sec-btn" data-sec="cap" onclick="edToggleSection(this)">💬 字幕一括設定 ▸</button>' +
+        '<button type="button" class="mini-btn ed-sec-btn" data-sec="ttl" onclick="edToggleSection(this)">🏷 タイトル一括設定 ▸</button>' +
+        '<button type="button" class="mini-btn ed-sec-btn" data-sec="scr" onclick="edToggleSection(this)">🖥 画面構成設定 ▸</button>' +
+        '<span class="opt">一括設定は全体に適用。個々の字幕をクリックして設定した内容が優先されます。</span>' +
       '</div>' +
-      '<div class="ed-clipstyle" hidden>' +
-      '<div class="ed-pos">' +
-        '<div class="ed-pos-side">' +
-          '<button type="button" class="mini-btn" onclick="resetPos(this)">位置を初期化</button>' +
-          '<label class="slider-item">字幕サイズ <b class="ed-capsz-o">' + capSz + '</b>' +
-            '<input type="range" class="ed-capsz" min="48" max="120" step="2" value="' + capSz + '"></label>' +
-          '<label class="slider-item">字幕の縁取り <b class="ed-capol-o">' + capOl + '</b>' +
-            '<input type="range" class="ed-capol" min="0" max="16" step="1" value="' + capOl + '"></label>' +
-          '<label class="slider-item">字幕幅 <b class="ed-capw-o">' + capW + '</b>%' +
-            '<input type="range" class="ed-capw" min="35" max="95" step="1" value="' + capW + '"></label>' +
-          '<label class="slider-item">タイトルサイズ <b class="ed-ttlsz-o">' + ttlSz + '</b>' +
-            '<input type="range" class="ed-ttlsz" min="50" max="140" step="2" value="' + ttlSz + '"></label>' +
-          '<label class="slider-item">タイトルの縁取り <b class="ed-ttlol-o">' + ttlOl + '</b>' +
-            '<input type="range" class="ed-ttlol" min="0" max="20" step="1" value="' + ttlOl + '"></label>' +
-          '<label class="slider-item">タイトル幅 <b class="ed-ttlw-o">' + ttlW + '</b>%' +
-            '<input type="range" class="ed-ttlw" min="35" max="95" step="1" value="' + ttlW + '"></label>' +
-          '<label class="slider-item">影の濃さ <b class="ed-shd-o">' + shD + '</b>' +
-            '<input type="range" class="ed-shd" min="0" max="16" step="1" value="' + shD + '"></label>' +
-          '<label class="slider-item">影の不透明度 <b class="ed-sha-o">' + shA + '</b>%' +
-            '<input type="range" class="ed-sha" min="0" max="100" step="5" value="' + shA + '"></label>' +
-          '<label class="slider-item">影のぼかし <b class="ed-shb-o">' + shB + '</b>' +
-            '<input type="range" class="ed-shb" min="0" max="10" step="0.5" value="' + shB + '"></label>' +
-          '<label class="slider-item">アニメーション' +
-            '<select class="ed-anim">' + optionsHtml(ANIM_OPTS, animV) + '</select></label>' +
-          '<label class="slider-item">アニメ速度 <b class="ed-aspd-o">' + aspdPct + '</b>%' +
-            '<input type="range" class="ed-aspd" min="25" max="300" step="5" value="' + aspdPct + '"></label>' +
-          '<label class="slider-item">退場アニメ' +
-            '<select class="ed-exit">' + optionsHtml(EXIT_OPTS, st.exit_animation || 'none') + '</select></label>' +
-          '<label class="slider-item">文字エフェクト' +
-            '<select class="ed-effect">' + optionsHtml(EFFECT_OPTS, effV) + '</select></label>' +
-          '<label class="slider-item ed-kara-item" title="しゃべった所まで字幕の色が変わります（色は「強調の色」）">' +
-            '<span>🎤 単語カラオケ</span><input type="checkbox" class="ed-kara"' + (st.karaoke ? ' checked' : '') + '></label>' +
-          '<label class="slider-item">画面構成(9:16)' +
-            '<select class="ed-reframe">' + optionsHtml([['crop', '中央クロップ'], ['blur', '背景ぼかし'], ['letterbox', 'レターボックス']], data.reframe || 'crop') + '</select></label>' +
-          '<label class="slider-item ed-lb-field"' + ((data.reframe || 'crop') !== 'letterbox' ? ' style="display:none"' : '') + '>帯の色' +
-            '<input type="color" class="ed-lb-color" value="' + (data.letterbox_color || '#000000') + '"></label>' +
-        '</div>' +
-      '</div>' +
-      '</div>' +
+      // ── 字幕一括設定 ──
+      '<div class="ed-clipstyle ed-sec ed-sec-cap" hidden><div class="ed-pos-side">' +
+        '<label class="slider-item">文字色<input type="color" class="ed-capcol" value="' + (st.subtitle_color || '#FFFFFF') + '"></label>' +
+        '<label class="slider-item">縁の色<input type="color" class="ed-capoutcol" value="' + (st.outline_color || '#000000') + '"></label>' +
+        '<label class="slider-item" title="「強調」にした字幕の色">強調の色<input type="color" class="ed-emphcol" value="' + (st.emphasis_color || '#FFE600') + '"></label>' +
+        '<label class="slider-item">字幕サイズ <b class="ed-capsz-o">' + capSz + '</b>' +
+          '<input type="range" class="ed-capsz" min="48" max="120" step="2" value="' + capSz + '"></label>' +
+        '<label class="slider-item">字幕の縁取り <b class="ed-capol-o">' + capOl + '</b>' +
+          '<input type="range" class="ed-capol" min="0" max="16" step="1" value="' + capOl + '"></label>' +
+        '<label class="slider-item">字幕幅 <b class="ed-capw-o">' + capW + '</b>%' +
+          '<input type="range" class="ed-capw" min="35" max="95" step="1" value="' + capW + '"></label>' +
+        '<label class="slider-item">影の濃さ <b class="ed-shd-o">' + shD + '</b>' +
+          '<input type="range" class="ed-shd" min="0" max="16" step="1" value="' + shD + '"></label>' +
+        '<label class="slider-item">影の不透明度 <b class="ed-sha-o">' + shA + '</b>%' +
+          '<input type="range" class="ed-sha" min="0" max="100" step="5" value="' + shA + '"></label>' +
+        '<label class="slider-item">影のぼかし <b class="ed-shb-o">' + shB + '</b>' +
+          '<input type="range" class="ed-shb" min="0" max="10" step="0.5" value="' + shB + '"></label>' +
+        '<label class="slider-item">アニメーション（イン）' +
+          '<select class="ed-anim">' + optionsHtml(ANIM_OPTS, animV) + '</select></label>' +
+        '<label class="slider-item">イン速度 <b class="ed-aspd-o">' + aspdPct + '</b>%' +
+          '<input type="range" class="ed-aspd" min="25" max="300" step="5" value="' + aspdPct + '"></label>' +
+        '<label class="slider-item">アニメーション（アウト）' +
+          '<select class="ed-exit">' + optionsHtml(EXIT_OPTS, st.exit_animation || 'none') + '</select></label>' +
+        '<label class="slider-item">アウト速度 <b class="ed-xspd-o">' + xspdPct + '</b>%' +
+          '<input type="range" class="ed-xspd" min="25" max="300" step="5" value="' + xspdPct + '"></label>' +
+        '<label class="slider-item">文字エフェクト' +
+          '<select class="ed-effect">' + optionsHtml(EFFECT_OPTS, effV) + '</select></label>' +
+        '<label class="slider-item">エフェクトの強度 <b class="ed-fxk-o">' + fxkPct + '</b>%' +
+          '<input type="range" class="ed-fxk" min="20" max="300" step="10" value="' + fxkPct + '"></label>' +
+      '</div></div>' +
+      // ── タイトル一括設定 ──
+      '<div class="ed-clipstyle ed-sec ed-sec-ttl" hidden><div class="ed-pos-side">' +
+        '<label class="slider-item">文字色<input type="color" class="ed-ttlcol" value="' + (st.title_color || '#FFFFFF') + '"></label>' +
+        '<label class="slider-item">縁の色<input type="color" class="ed-ttloutcol" value="' + (st.title_outline_color || st.outline_color || '#000000') + '"></label>' +
+        '<label class="slider-item">タイトルサイズ <b class="ed-ttlsz-o">' + ttlSz + '</b>' +
+          '<input type="range" class="ed-ttlsz" min="50" max="140" step="2" value="' + ttlSz + '"></label>' +
+        '<label class="slider-item">タイトルの縁取り <b class="ed-ttlol-o">' + ttlOl + '</b>' +
+          '<input type="range" class="ed-ttlol" min="0" max="20" step="1" value="' + ttlOl + '"></label>' +
+        '<label class="slider-item">タイトル幅 <b class="ed-ttlw-o">' + ttlW + '</b>%' +
+          '<input type="range" class="ed-ttlw" min="35" max="95" step="1" value="' + ttlW + '"></label>' +
+        '<button type="button" class="mini-btn" onclick="resetPos(this)">位置を初期化（タイトル・字幕）</button>' +
+      '</div></div>' +
+      // ── 画面構成設定 ──
+      '<div class="ed-clipstyle ed-sec ed-sec-scr" hidden><div class="ed-pos-side">' +
+        '<label class="slider-item">画面構成(9:16)' +
+          '<select class="ed-reframe">' + optionsHtml([['crop', '中央クロップ'], ['blur', '背景ぼかし'], ['letterbox', 'レターボックス']], data.reframe || 'crop') + '</select></label>' +
+        '<label class="slider-item ed-lb-field"' + ((data.reframe || 'crop') !== 'letterbox' ? ' style="display:none"' : '') + '>帯の色' +
+          '<input type="color" class="ed-lb-color" value="' + (data.letterbox_color || '#000000') + '"></label>' +
+      '</div></div>' +
       // 旧クリップ: プレビュー土台（字幕なし動画）を裏で準備中の案内（完成で自動非表示）
       (!data.preview && ed._inputExists
         ? '<div class="ed-clean-note hint">🎬 プレビュー用動画を準備中…（完了すると左の動画から焼込み字幕が消え、編集中の字幕だけが表示されます。編集はそのまま続けられます）</div>'
@@ -2536,10 +2589,23 @@ function wireEditorPreview(ed) {
   if (eAspd) eAspd.addEventListener('input', () => renderPreviewTelops(ed, true));   // 速度変更は即再生
   const eEff = ed.querySelector('.ed-effect');
   if (eEff) eEff.addEventListener('change', () => { updateEditorPreview(ed); renderPreviewTelops(ed); applyEditorFx(ed); });
+  const eFxk = ed.querySelector('.ed-fxk');
+  if (eFxk) eFxk.addEventListener('input', () => { updateEditorPreview(ed); renderPreviewTelops(ed); });
   const eExit = ed.querySelector('.ed-exit');
   if (eExit) eExit.addEventListener('change', upd);
-  const eKara = ed.querySelector('.ed-kara');
-  if (eKara) eKara.addEventListener('change', () => renderPreviewTelops(ed, true));
+  const eXspd = ed.querySelector('.ed-xspd');
+  if (eXspd) eXspd.addEventListener('input', upd);
+  // 一括の色（字幕/縁/強調/タイトル/タイトル縁）はプレビュー基準 ed._pv を即時更新して反映
+  const colorMap = [['.ed-capcol', 'sub'], ['.ed-capoutcol', 'out'], ['.ed-emphcol', 'emph'],
+                    ['.ed-ttlcol', 'title'], ['.ed-ttloutcol', 'titleOut']];
+  colorMap.forEach(([sel, key]) => {
+    const e = ed.querySelector(sel);
+    if (e) e.addEventListener('input', () => {
+      ed._pv = ed._pv || {};
+      ed._pv[key] = e.value;
+      updateEditorPreview(ed); renderPreviewTelops(ed);
+    });
+  });
   // 動画の再生位置に同期してプレビューのテロップを更新（全変更を反映）。
   // 再生中: 焼き込み済みテロップは動画側に任せ、未保存の変更だけチップで重ねる
   // （renderPreviewTelops 内で判定）。タイトルチップも未変更なら再生中は隠す。
@@ -2659,7 +2725,8 @@ function _pvShadow(ed, sc) {
 function _tpKey(tp) {
   return JSON.stringify([+tp.start, +tp.end, tp.text || '', tp.style || '', !!tp.emphasis,
     tp.animation || '', +(tp.layer || 0),
-    tp.font || '', tp.color || '', tp.outline_color || '', +(tp.size || 0), +(tp.width || 0), tp.effect || '', +(tp.anim_speed || 0),
+    tp.font || '', tp.color || '', tp.outline_color || '', +(tp.size || 0), +(tp.width || 0),
+    tp.effect || '', +(tp.effect_strength || 0), +(tp.anim_speed || 0), tp.exit || '', +(tp.exit_speed || 0),
     (tp.pos && tp.pos.x != null) ? [+(+tp.pos.x).toFixed(3), +(+tp.pos.y).toFixed(3)] : null]);
 }
 
@@ -2691,6 +2758,7 @@ function renderPreviewTelops(ed, replay, opts) {
   const capOl = (() => { const e = ed.querySelector('.ed-capol'); const n = e ? +e.value : NaN; return isNaN(n) ? 6 : n; })();
   const clipSpd = ((+((ed.querySelector('.ed-aspd') || {}).value) || 100) / 100) || 1;   // アニメ速度
   const clipEff = ((ed.querySelector('.ed-effect') || {}).value) || 'none';
+  const clipFxK = ((+((ed.querySelector('.ed-fxk') || {}).value) || 100) / 100) || 1;    // エフェクト強度
   const ff = pv.font ? `'${pv.font}', sans-serif` : 'sans-serif';
   const soff = +ed._subOffset || 0;   // 字幕タイミング（プレビューを実描画に合わせてずらす）
   const vPlaying = !!(v && !v.paused && !v.ended);
@@ -2731,15 +2799,13 @@ function renderPreviewTelops(ed, replay, opts) {
     const wr = plain ? ((+tp.width > 0) ? Math.max(0.35, Math.min(0.95, +tp.width)) : capW) : 0.66;
     const maxCh = Math.max(4, Math.floor(1080 * wr / size));
     // カラオケ/1文字入場は常に文字spanで描画（経過時間ぶん負delay＝シーク位置でも途中経過が正しい）
-    const karaOn = plain && !!(ed.querySelector('.ed-kara') || {}).checked;
     const spdT = (+tp.anim_speed > 0 ? +tp.anim_speed : clipSpd) || 1;   // 個別速度＞クリップ
     const effSel = tp.effect ? tp.effect : clipEff;                       // 個別エフェクト＞クリップ
+    const fxK = (+tp.effect_strength > 0 ? +tp.effect_strength : clipFxK) || 1;   // 強度も個別＞クリップ
+    chip.style.setProperty('--fx', String(fxK));   // CSS 側でぼかし/影の量に反映
     const chAnim = plain ? ((tp.animation || clipAnim) === 'stagger' ? 'stagger'
       : (tp.animation || clipAnim) === 'typewriter' ? 'typewriter' : '') : '';
-    if (karaOn) {
-      chip.style.setProperty('--pv-kara', pv.hl || '#FFE600');
-      chip.innerHTML = _pvCharSpans(tp.text, maxCh, 2, 'karaoke', (tp.end - tp.start), replay ? 0 : elapsed, vPlaying || replay);
-    } else if (chAnim) {
+    if (chAnim) {
       chip.innerHTML = _pvCharSpans(tp.text, maxCh, 2, chAnim, (tp.end - tp.start), replay ? 0 : elapsed, vPlaying || replay, spdT);
     } else if (effSel === 'rainbow') {
       // 虹色ウェーブ: 文字ごとに位相をずらした虹サイクル（焼込み _rainbow_wave_text と同調）
@@ -3200,7 +3266,9 @@ function _subClone(arr) {
     start: +t.start || 0, end: +t.end || 0, text: t.text || '',
     style: t.style || '', emphasis: !!t.emphasis, animation: t.animation || '',
     font: t.font || '', color: t.color || '', outline_color: t.outline_color || '',
-    size: +t.size || 0, width: +t.width || 0, effect: t.effect || '', anim_speed: +t.anim_speed || 0,
+    size: +t.size || 0, width: +t.width || 0, effect: t.effect || '',
+    effect_strength: +t.effect_strength || 0, anim_speed: +t.anim_speed || 0,
+    exit: t.exit || '', exit_speed: +t.exit_speed || 0,
     layer: +t.layer || 0, pos: (t.pos && t.pos.x != null) ? { x: +t.pos.x, y: +t.pos.y } : null,
   }));
 }
@@ -3299,7 +3367,7 @@ function initPosEditor(ed) {
   bind('.ed-capol', '.ed-capol-o'); bind('.ed-ttlol', '.ed-ttlol-o');
   bind('.ed-ttlw', '.ed-ttlw-o'); bind('.ed-capw', '.ed-capw-o');
   bind('.ed-shd', '.ed-shd-o'); bind('.ed-sha', '.ed-sha-o'); bind('.ed-shb', '.ed-shb-o');
-  bind('.ed-aspd', '.ed-aspd-o');
+  bind('.ed-aspd', '.ed-aspd-o'); bind('.ed-xspd', '.ed-xspd-o'); bind('.ed-fxk', '.ed-fxk-o');
 }
 
 function resetPos(btn) {
@@ -3327,7 +3395,10 @@ function _editorPayload(ed) {
     if (tp.size) o.size = tp.size;
     if (tp.width) o.width = +(+tp.width).toFixed(3);
     if (tp.effect) o.effect = tp.effect;         // 'none' も明示指定として送る
+    if (tp.effect_strength) o.effect_strength = tp.effect_strength;
     if (tp.anim_speed) o.anim_speed = tp.anim_speed;
+    if (tp.exit) o.exit = tp.exit;               // アニメーション（アウト）
+    if (tp.exit_speed) o.exit_speed = tp.exit_speed;
     if (tp.layer) o.layer = tp.layer;
     if (tp.pos && tp.pos.x != null) o.pos = { x: tp.pos.x, y: tp.pos.y };
     return o;
@@ -3344,8 +3415,13 @@ function _editorPayload(ed) {
   const sb = ed.querySelector('.ed-shb'); if (sb) style.shadow_blur = +sb.value;                  // 影のぼかし
   const qs = (sel, key) => { const e = ed.querySelector(sel); if (e) style[key] = e.value; };
   qs('.ed-anim', 'animation'); qs('.ed-effect', 'effect'); qs('.ed-exit', 'exit_animation');
-  const asp = ed.querySelector('.ed-aspd'); if (asp) style.animation_speed = (+asp.value || 100) / 100;   // アニメ速度
-  const kc = ed.querySelector('.ed-kara'); if (kc) style.karaoke = !!kc.checked;   // 単語カラオケ
+  // 一括設定の色（字幕/縁/強調/タイトル/タイトル縁）
+  qs('.ed-capcol', 'subtitle_color'); qs('.ed-capoutcol', 'outline_color');
+  qs('.ed-emphcol', 'emphasis_color');
+  qs('.ed-ttlcol', 'title_color'); qs('.ed-ttloutcol', 'title_outline_color');
+  const asp = ed.querySelector('.ed-aspd'); if (asp) style.animation_speed = (+asp.value || 100) / 100;   // アニメ速度（イン）
+  const xsp = ed.querySelector('.ed-xspd'); if (xsp) style.exit_speed = (+xsp.value || 100) / 100;        // 同（アウト）
+  const fxk = ed.querySelector('.ed-fxk'); if (fxk) style.effect_strength = (+fxk.value || 100) / 100;    // エフェクト強度
   const num = sel => { const e = ed.querySelector(sel); return e ? (+e.value || 0) : 0; };
   const out = {
     title, telops, style,
@@ -3440,8 +3516,10 @@ function bulkStyleFromCreate() {
     animate: animV !== 'none',
     animation: animV,
     effect: _effSel(),
+    effect_strength: (+v('fxStrength') || 100) / 100,
+    animation_speed: (+v('animSpeed') || 100) / 100,
     exit_animation: v('exitSelect') || 'none',
-    karaoke: !!(document.getElementById('karaOn') || {}).checked,
+    exit_speed: (+v('exitSpeed') || 100) / 100,
     shadow_depth: +v('shadowD'),
     shadow_alpha: (+v('shadowA') || 0) / 100,
     shadow_blur: +v('shadowB'),
